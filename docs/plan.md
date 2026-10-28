@@ -14,7 +14,7 @@ Both call the same `capture()` function. Playwright (Chromium) does the work.
 
 ## What RPC does today (source reading)
 
-**Device data** (`lib/devices.ts`). 50 devices in four categories
+**Device data** (`lib/devices.ts`). 49 devices in four categories
 (apple-phone, android-phone, tablet, laptop). Each has `id`, `name`,
 portrait CSS `width`/`height`, `dpr`, and a `bezel` kind (phone-island,
 phone-notch, phone-classic, phone-home, tablet, laptop, monitor). Some
