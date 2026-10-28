@@ -260,3 +260,70 @@ MCP tool returns it as a tool error and the server keeps running. `rpc
 doctor` launches Chromium to check it; `rpc install` runs this package's own
 `playwright install chromium`. Tested by pointing `PLAYWRIGHT_BROWSERS_PATH`
 at an empty temp dir. Package stays `"private": true` (GitHub, not npm).
+
+## v0.3 CLI UX
+
+The CLI should feel like the `skills` CLI behind skills.sh. Research and the
+reasoning behind each choice are in `docs/cli-design.md`; this is the plan.
+
+**Two output modes.** Rich output (banner, clack rail, spinners, prompts,
+boxed summaries, colour) only when stdout is a TTY, `CI` is unset, `TERM`
+isn't `dumb` and `--json` isn't given. In every other case the CLI prints
+exactly what 0.2 printed, so agents, scripts and CI logs see no change.
+`--json` output, exit codes and `rpc mcp` are untouched: the MCP path never
+imports the UI module, and the UI module is loaded lazily by the other
+commands. `NO_COLOR` turns colour off (rich layout stays); `FORCE_COLOR`
+turns colour on for the plain layout too.
+
+**`rpc` with no args (TTY).** Banner (`RPC` block wordmark, grey gradient),
+`rpc` badge, then:
+
+1. URL prompt, validated with `normalizeUrl`. If something answers on
+   localhost:3000 (or 5173, 4321, 8080), that's the default.
+2. Grouped multi-select of all 49 devices (Apple phones, Android phones,
+   tablets, laptops and desktops), with iphone-15-pro, ipad-air-11 and
+   desktop-1440 preselected.
+3. Multi-select of options: bezels (on), full page, dark mode, reduced
+   motion.
+4. `Capture Summary` box, `Proceed with capture?` confirm.
+5. The capture itself, exactly as `rpc shot` runs it, plus a dim
+   `rpc shot …` line with the equivalent command so it can be re-run.
+
+Without a TTY, `rpc` alone still prints the usage text.
+
+**`rpc shot` (TTY).** Banner and badge, a `Capture Summary` box (no
+confirm), a spinner while Chromium starts, one spinner per device that
+resolves to `◇ iphone-15-pro  393×852 @3x  200 · 1.4s` (or a red error
+line), then a results table (device, viewport, status, time, console
+errors), a `Captured N devices` box listing each file (cyan path, pixel
+size, file size) and each failure with its hint, and an outro:
+`Done!  Open with: open .rpc-shots`. Options and behaviour are unchanged.
+New `--open` flag opens the output folder when done (`open` on macOS,
+`xdg-open` on Linux, `explorer` on Windows); it works in every mode.
+`capture()` gains an optional `onDeviceStart` hook for the spinners.
+
+**`rpc devices` (TTY).** Same groups, coloured category headings with a
+count, aligned columns: id (cyan), CSS size, DPR, name (dim), and the
+aliases that point at each device. `--json` unchanged.
+
+**`rpc doctor` (TTY).** A checklist on the rail: node, Playwright,
+browsers path, Chromium launch (green ◆ / red ■) and the fix in a box when
+it fails. `rpc install` ends with the same checklist.
+
+**Help.** `rpc --help` in a TTY: bold section headings, aligned commands,
+dim descriptions, `$` examples with aligned dim comments. Per-command help:
+`rpc shot --help`, `rpc help shot` (also for devices, doctor, install, mcp).
+`rpc --help` without a TTY prints the 0.2 usage text unchanged.
+`--version` prints the bare version in every mode.
+
+**Dependencies.** `@clack/prompts` and `picocolors`, nothing else.
+
+**Tests.** Mode decisions (TTY, CI, TERM, `--json`, `NO_COLOR`,
+`FORCE_COLOR`) as a pure function; the rich renderers (device table,
+results table, capture boxes) render without escape codes under
+`NO_COLOR`; spawned non-TTY runs of `devices`, `--help`, no-args and
+`shot … --json` (with `FORCE_COLOR=1`) are byte-compatible with 0.2 and
+contain no escape codes; argument parsing accepts every 0.2 flag plus
+`--open` and per-command `--help`. The real TTY experience is checked by
+running the built CLI in a pseudo-terminal, and `pnpm smoke:mcp` proves the
+MCP server is unaffected.

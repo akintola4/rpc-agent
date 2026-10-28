@@ -39,12 +39,26 @@ or `pnpm rpc` from inside the repo.
 ![rpc shot capturing three devices with bezels, then a full-page capture scrolling inside an iPhone frame](docs/media/demo.gif)
 
 ```sh
+rpc                    # interactive: pick a URL, devices and options
 rpc shot <url> [options]
 rpc devices [--json]
 rpc doctor [--json]    # is Chromium installed, and does it launch?
 rpc install            # download Chromium with rpc's own Playwright version
 rpc mcp
+rpc help <command>     # options and examples for one command
 ```
+
+Run `rpc` with no arguments in a terminal and it asks for the URL
+(defaulting to a dev server on localhost:3000, 5173, 4321 or 8080 if one is
+running), lets you tick devices from a grouped list (iPhone 15 Pro, iPad Air
+11" and Desktop 1440 are preselected) and pick bezels, full page, dark mode
+or reduced motion. It shows a summary, asks before capturing, and prints the
+equivalent `rpc shot` command at the end so you can re-run it.
+
+`rpc shot` in a terminal shows each device's progress, a results table and
+the files it wrote:
+
+<img alt="rpc shot in a terminal: a capture summary, one line per device with HTTP status and time, a results table, and the list of files written" src="docs/media/terminal-shot.png" width="720">
 
 | Option | Meaning |
 | --- | --- |
@@ -62,6 +76,7 @@ rpc mcp
 | `--timeout <ms>` | Navigation timeout. Default 30000 |
 | `--no-emulate` | Viewport and DPR only: no mobile user agent or touch |
 | `--json` | Print the result as JSON |
+| `--open` | Open the output folder when done (`open`, `xdg-open` or `explorer`) |
 
 The URL can be a full URL, a bare local host (`localhost:3000` becomes
 `http://`), a bare domain (`example.com` becomes `https://`) or a path to a
@@ -104,9 +119,23 @@ and `100vh` sections keep their real height.
 Bezels frame the above-the-fold viewport. With `--bezels --full-page` you get
 both: the full page raw, and the first screen framed.
 
+### Terminal, pipes and CI
+
+The banner, spinners, prompts and boxes only appear when stdout is an
+interactive terminal. When output goes to a pipe or a file, when `CI` is
+set, when `TERM=dumb`, and always with `--json`, rpc prints the same plain
+lines as 0.2 (`ok …`, `x …` plus `hint:`), so agents and scripts that read
+them see no change. `NO_COLOR` turns colour off; `FORCE_COLOR=1` adds colour
+to the plain lines. `rpc mcp` never prints anything but MCP messages.
+
 ### When a capture fails
 
-Each device fails on its own, with an `error`, a `code` and usually a `hint`:
+Each device fails on its own, with an `error`, a `code` and usually a `hint`.
+In a terminal, devices that fail the same way share one hint:
+
+<img alt="rpc shot against a host that doesn't resolve: both devices fail with ERR_NAME_NOT_RESOLVED and one hint explains what to check" src="docs/media/terminal-error.png" width="720">
+
+Plain output (pipes, agents, CI):
 
 ```
 x iphone-15 (393x852 @3x): Could not resolve host example.dev (net::ERR_NAME_NOT_RESOLVED)
@@ -222,7 +251,8 @@ count and labels, including through the MCP server. The missing-browser tests
 point `PLAYWRIGHT_BROWSERS_PATH` at an empty temp dir.
 
 The README media are built from real captures by `scripts/media/build.ts`;
-`docs/media.md` explains how.
+`docs/media.md` explains how. The CLI's design notes, and what it borrows
+from the `skills` CLI, are in `docs/cli-design.md`.
 
 ## Limitations
 

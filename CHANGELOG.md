@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.3.0
+
+A terminal UI modelled on the `skills` CLI (skills.sh). Nothing changes for
+agents, scripts or CI.
+
+### Added
+
+- `rpc` with no arguments, in a terminal, is an interactive capture: URL
+  (defaults to a running dev server on localhost), a grouped device picker,
+  bezels / full page / dark mode / reduced motion, a summary and a confirm.
+  It ends with the equivalent `rpc shot` command.
+- `rpc shot` in a terminal: `RPC` banner, a capture summary, a spinner per
+  device that resolves to status and time, a results table (status, time,
+  console errors), the files written with pixel and file sizes, failures
+  grouped with their hint, and `Done!  Open with: open .rpc-shots`.
+- `--open` opens the output folder when the capture finishes.
+- `rpc devices` in a terminal: aligned, coloured by category, with each
+  device's aliases. `rpc doctor` in a terminal: a checklist with the fix in
+  a box.
+- Per-command help: `rpc help shot`, `rpc shot --help` (also devices,
+  doctor, install, mcp). `rpc --help` in a terminal has sections and
+  examples.
+- `docs/cli-design.md`: what rpc borrows from the `skills` CLI and when the
+  rich output is used.
+
+### Unchanged
+
+- Output to pipes, files and CI (`CI` set, `TERM=dumb`) is the 0.2 output.
+  `--json` output, exit codes and the MCP server are untouched; `rpc mcp`
+  and `--json` don't load the UI code. `NO_COLOR` turns colour off and
+  `FORCE_COLOR` turns it on for the plain output.
+
+### Dependencies
+
+- `@clack/prompts` and `picocolors`.
+
 ## 0.2.0
 
 From the first real use: an agent reviewing a deployed site on iphone-15,

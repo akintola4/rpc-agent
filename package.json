@@ -1,6 +1,6 @@
 {
   "name": "rpc-agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Screenshot a URL at device viewports, optionally framed in device bezels. CLI and MCP server for AI coding agents.",
   "type": "module",
@@ -25,7 +25,9 @@
     "media": "pnpm build && tsx scripts/media/build.ts"
   },
   "dependencies": {
+    "@clack/prompts": "^1.8.1",
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "picocolors": "^1.1.1",
     "playwright": "^1.64.1",
     "zod": "^4.6.7"
   },
