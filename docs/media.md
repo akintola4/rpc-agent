@@ -13,6 +13,49 @@ pnpm media --only gif     # or: hero, slices
 Needs ffmpeg on PATH and network access for the captures. Captures and
 frames go to `.media-cache/` (gitignored); only the final files are committed.
 
+## Plan: the 0.3 demo GIF
+
+The GIF still shows the 0.2 `ok` output in a 280 px pane. The new version
+shows the real 0.3 terminal UI, full frame, then the devices it produced.
+
+Storyboard (about 16 s at 20 fps):
+
+1. `$ rpc` typed with no arguments. The block-letter banner and the `rpc`
+   badge appear, then the prompts are answered at typing speed: URL
+   `hello-greetings.vercel.app`, the device list (untick iPhone 15 Pro, tick
+   iPhone 15; iPad Air 11" and Desktop 1440 stay ticked), bezels on, the
+   Capture Summary box, `Proceed with capture?` yes.
+2. Chromium starts, each device's spinner turns into a `◇` line with its
+   status and time, then the Results table, the green `Captured 3 devices`
+   box, the re-run command and `Done!`. Held long enough to read.
+3. The terminal fades out and the three framed shots rise in (the current
+   scene, scaled up to the new frame).
+4. If the length and size budgets allow: the full-page capture scrolling
+   inside the iPhone bezel, with the command as a caption instead of a
+   second terminal.
+
+Capture: `rpc` runs in a real pseudo-terminal (a small stdlib Python bridge,
+since Node has no pty without a native module), 96 columns by 26 rows.
+build.ts sends the keystrokes when each prompt appears and records every
+output chunk with its time to `.media-cache/interactive.json`. `--fresh`
+re-records it. The probe for a local dev server is stubbed out for the
+recording so the run is the same on every machine.
+
+Rendering: the chunks go through `@xterm/headless` (devDependency), so
+cursor moves, clack's in-place redraws and spinner frames resolve exactly as
+in a terminal. Each kept screen state becomes a grid of cells. Every
+character sits in a fixed 1ch cell, so fallback glyphs (`◇`, `✓`, `×`)
+can't shift a column, and box-drawing and block characters are drawn as
+masks that fill the whole cell, so rails, box borders and the banner join up
+with no gaps between rows. Long waits (Chromium start, each 15-20 s capture)
+are cut to a few spinner frames; typing and prompt redraws keep their order.
+The scrollback scrolls smoothly when output passes the bottom row.
+
+Layout and budget: 1000x640, terminal window filling the frame with 15 px
+text (about 13 px at GitHub's README width). Neutral grey page behind a dark
+terminal, so one file works in light and dark. Under 5 MB, 12-18 s loop,
+same ffmpeg two-pass palette. Scene 4 is dropped if it pushes either budget.
+
 ## What it makes
 
 | File | What |
