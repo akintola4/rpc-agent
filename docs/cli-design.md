@@ -122,3 +122,9 @@ Nothing else: no commander/yargs (`node:util` `parseArgs` stays), no
 ora/chalk/boxen/cli-table, no node-pty (tests check the mode decisions and
 renderers directly, and the real TTY run is checked by hand through a
 pseudo-terminal).
+
+## Exit codes
+
+Unchanged for every 0.2 path. The interactive flow adds two: answering "No"
+at `Proceed with capture?` exits 0, and Ctrl-C or Escape at any prompt exits
+130, the usual code for an interrupt.

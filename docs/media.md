@@ -19,6 +19,7 @@ frames go to `.media-cache/` (gitignored); only the final files are committed.
 | --- | --- |
 | `hero-light.png`, `hero-dark.png` | iPhone 15, iPad Air 11" and Desktop 1440 framed shots side by side, transparent background, 1920 px wide (2x). The README picks one with `<picture>` and `prefers-color-scheme`. |
 | `demo.gif` | 13 s loop, 960x540, 20 fps: the three-device command and its output, the framed results, then a full-page capture scrolling inside the iPhone bezel. |
+| `terminal-shot.png`, `terminal-error.png` | `rpc shot` in an interactive terminal (0.3), for a working site and for a host that doesn't resolve. Not built by `pnpm media`; see below. |
 | `mcp-slices-light.png`, `mcp-slices-dark.png` | The first five labelled review slices the MCP `screenshot` tool returns for a full page. |
 
 ## Approach
@@ -62,3 +63,16 @@ file stems below them. After a change, look at a few frames:
 ```sh
 ffmpeg -i docs/media/demo.gif -vf "fps=20,select='eq(n\,40)+eq(n\,100)+eq(n\,200)',tile=3x1" -frames:v 1 /tmp/frames.png
 ```
+
+## Terminal screenshots
+
+`terminal-shot.png` and `terminal-error.png` are real runs of the built CLI
+in a pseudo-terminal (92 columns), so they show the rich output a person
+sees, not the plain output that `pnpm media` records. The raw output was
+replayed through a terminal emulator (`pyte`), turned into coloured HTML and
+screenshotted with Playwright at 2x. The block-letter banner is left out:
+browsers draw box-drawing and block glyphs with gaps that a terminal
+doesn't have.
+
+The GIF still shows the plain output. That's what an agent sees, and the
+rich output is too tall for its 280 px terminal.
