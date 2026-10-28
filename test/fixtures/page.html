@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rpc fixture</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; font: 18px/1.5 system-ui, sans-serif; background: #ffffff; color: #111; }
+  header {
+    position: sticky; top: 0; z-index: 10; height: 56px;
+    display: flex; align-items: center; justify-content: space-between; padding: 0 16px;
+    background: #111; color: #fff; font-weight: 600;
+  }
+  /* 100vh hero in a solid colour: the e2e test samples it to check alignment. */
+  .hero {
+    height: calc(100vh - 56px); display: grid; place-items: center;
+    background: rgb(255, 0, 170); color: #fff; font-size: 32px; font-weight: 700; text-align: center;
+  }
+  .ua { font-size: 12px; font-weight: 400; opacity: .8; max-width: 90vw; word-break: break-all; }
+  section { padding: 24px 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+  .card { height: 120px; border-radius: 12px; background: #e8e8f0; display: grid; place-items: center; }
+  .spacer { height: 1600px; background: linear-gradient(#fff, #dde); }
+  /* Turns green only once an IntersectionObserver has seen it. */
+  #reveal { height: 400px; display: grid; place-items: center; font-size: 28px; color: #fff; background: rgb(220, 0, 0); }
+  #reveal.seen { background: rgb(0, 170, 60); }
+  img { display: block; width: 100%; height: 200px; object-fit: cover; }
+  @media (min-width: 1024px) { .hero::after { content: ' (desktop layout)'; } }
+</style>
+</head>
+<body>
+<header><span>RPC fixture</span><span id="w"></span></header>
+<div class="hero"><div>Hero 100vh<div class="ua" id="ua"></div></div></div>
+<section><div class="grid">
+  <div class="card">1</div><div class="card">2</div><div class="card">3</div>
+  <div class="card">4</div><div class="card">5</div><div class="card">6</div>
+</div></section>
+<div class="spacer"></div>
+<img loading="lazy" alt="lazy" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3Crect width='10' height='10' fill='%2300a'/%3E%3C/svg%3E">
+<div id="reveal">revealed by IntersectionObserver</div>
+<script>
+  document.getElementById('w').textContent = innerWidth + 'px';
+  document.getElementById('ua').textContent = navigator.userAgent;
+  new IntersectionObserver((entries, obs) => {
+    for (const e of entries) if (e.isIntersecting) { e.target.classList.add('seen'); obs.disconnect(); }
+  }).observe(document.getElementById('reveal'));
+</script>
+</body>
+</html>
