@@ -21,7 +21,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "rpc": "tsx src/cli.ts",
-    "smoke:mcp": "tsx scripts/mcp-smoke.ts"
+    "smoke:mcp": "tsx scripts/mcp-smoke.ts",
+    "media": "pnpm build && tsx scripts/media/build.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

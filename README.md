@@ -1,5 +1,10 @@
 # rpc-agent
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/hero-dark.png">
+  <img alt="A site captured by rpc on an iPhone 15, an iPad Air 11 and a 1440 px desktop, each framed in its device bezel" src="docs/media/hero-light.png">
+</picture>
+
 Screenshot a URL at real device viewports, optionally framed in a device
 bezel, so an AI coding agent can look at the UI it just built. It's a CLI and
 an MCP server in one package, with Playwright (Chromium) doing the capture.
@@ -30,6 +35,8 @@ Optionally put `rpc` on your PATH with `pnpm link --global`. Without it, run
 or `pnpm rpc` from inside the repo.
 
 ## CLI
+
+![rpc shot capturing three devices with bezels, then a full-page capture scrolling inside an iPhone frame](docs/media/demo.gif)
 
 ```sh
 rpc shot <url> [options]
@@ -148,6 +155,11 @@ Then the images:
   `iphone-15 · slice 2/7 · y=852–1704 css px`. A three-device review of a
   typical marketing page is roughly 0.5 MB of JPEG.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/mcp-slices-dark.png">
+  <img alt="The first five labelled full-page slices returned for an iPhone 15 capture" src="docs/media/mcp-slices-light.png">
+</picture>
+
 When a page has more slices than `maxSlices`, the text says which ones were
 skipped (`slices 11-26 (y=8520-21656 css px) skipped inline`), all slices are
 written to disk and the summary gives their paths and the full PNG, so the
@@ -199,6 +211,7 @@ pnpm test        # vitest: unit tests plus e2e captures of local fixtures
 pnpm typecheck
 pnpm build
 pnpm smoke:mcp [url] [--full-page] [--devices a,b] [--max-slices n]
+pnpm media       # regenerate the README images and GIF (needs ffmpeg)
 ```
 
 The e2e tests serve `test/fixtures` locally. `tall.html` is 21,656 CSS px
@@ -207,6 +220,9 @@ the known layout across all seams, that the sticky header and a fixed badge
 appear once, that the IntersectionObserver section rendered, and the slice
 count and labels, including through the MCP server. The missing-browser tests
 point `PLAYWRIGHT_BROWSERS_PATH` at an empty temp dir.
+
+The README media are built from real captures by `scripts/media/build.ts`;
+`docs/media.md` explains how.
 
 ## Limitations
 
