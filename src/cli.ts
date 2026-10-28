@@ -45,6 +45,7 @@ function printShot(s: DeviceShot): void {
   const label = `${s.device} (${s.viewport.width}x${s.viewport.height} @${s.dpr}x)`;
   if (s.error) {
     console.error(`x ${label}: ${s.error}`);
+    if (s.hint) console.error(`   hint: ${s.hint}`);
     return;
   }
   const lines = [`ok ${label}${s.status && s.status >= 400 ? ` HTTP ${s.status}` : ''}`];

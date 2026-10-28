@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, extname, resolve } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
 import { renderFramed } from './composite.js';
+import { explainError } from './errors.js';
 import { emulationFor, resolveDevices, type Device } from './devices.js';
 import type { ShotOptions } from './options.js';
 import { pngSize } from './png.js';
@@ -33,7 +34,12 @@ export interface DeviceShot {
   title?: string;
   /** Uncaught exceptions and console.error lines, deduped, max 20. */
   consoleErrors?: string[];
+  /** One-line failure message (navigation, wait or capture). */
   error?: string;
+  /** Machine-readable failure code: `ERR_NAME_NOT_RESOLVED`, `TIMEOUT`, ... */
+  code?: string;
+  /** What to do about the failure. */
+  hint?: string;
   /** In-memory buffers for callers that want them (MCP previews). */
   buffers?: { shot?: Buffer; framed?: Buffer };
 }
@@ -80,7 +86,10 @@ export async function capture(opts: ShotOptions, hooks: CaptureHooks = {}): Prom
         shot = await captureDevice(browser, device, opts, outDir);
       } catch (err) {
         shot = baseShot(device);
-        shot.error = (err as Error).message.split('\n')[0] ?? String(err);
+        const e = explainError(err, { url: opts.url, timeoutMs: opts.timeoutMs, waitFor: opts.waitFor });
+        shot.error = e.error;
+        shot.code = e.code;
+        if (e.hint) shot.hint = e.hint;
       }
       if (!hooks.keepBuffers) delete shot.buffers;
       hooks.onDevice?.(shot);
