@@ -258,8 +258,11 @@ export function capturedLines(result: ShotResult, c: Colors): string[] {
   const width = textWidth();
   const paths = result.shots.flatMap(s => [s.shot?.path, s.framed?.path].filter((x): x is string => Boolean(x)));
   const pathW = Math.min(Math.max(0, ...paths.map(x => rel(x).length)), width - 18);
+  // Pad dimensions to one width so the " · size" separators line up in a column.
+  const dims = result.shots.flatMap(s => [s.shot, s.framed].filter(Boolean).map(f => `${f!.width}×${f!.height}`));
+  const dimsW = Math.max(0, ...dims.map(d => d.length));
   const file = (path: string, w: number, h: number, extra = '') => {
-    const meta = [`${w}×${h}`, size(path), extra].filter(Boolean).join(' · ');
+    const meta = [`${w}×${h}`.padEnd(dimsW), size(path), extra].filter(Boolean).join(' · ');
     out.push(`${c.green('✓')} ${padAnsi(c.cyan(rel(path)), pathW)}  ${c.dim(meta)}`);
   };
   // Devices that failed the same way share one line and one hint.
