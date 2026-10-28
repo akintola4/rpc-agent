@@ -80,6 +80,8 @@ export interface ShotResult {
 export interface CaptureHooks {
   /** Reuse a browser; otherwise one is launched and closed. */
   browser?: Browser;
+  /** Called before each device is captured (CLI progress). */
+  onDeviceStart?: (device: Device) => void;
   onDevice?: (shot: DeviceShot) => void;
   /** Keep image buffers on the result (default false). */
   keepBuffers?: boolean;
@@ -101,6 +103,7 @@ export async function capture(opts: ShotOptions, hooks: CaptureHooks = {}): Prom
     const shots: DeviceShot[] = [];
     for (const device of devices) {
       let shot: DeviceShot;
+      hooks.onDeviceStart?.(device);
       try {
         shot = await captureDevice(browser, device, opts, outDir, hooks);
       } catch (err) {
