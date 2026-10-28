@@ -129,7 +129,12 @@ export function createServer(): McpServer {
       }
 
       const inline = args.inline ?? true;
-      const browser = await launchBrowser();
+      let browser: Awaited<ReturnType<typeof launchBrowser>>;
+      try {
+        browser = await launchBrowser();
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: `Could not start the browser: ${(err as Error).message}` }] };
+      }
       try {
         const result = await capture(options, { browser, keepBuffers: true, inlineSlices: inline && options.fullPage });
         const content: Content[] = [

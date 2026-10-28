@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { relative } from 'node:path';
 import { ArgError, parseCli, USAGE } from './args.js';
+import { doctor, installChromium, type DoctorReport } from './browser.js';
 import { capture, type DeviceShot } from './capture.js';
 import { CATEGORY_LABELS, CATEGORY_ORDER, DEVICE_ALIASES, DEVICES } from './devices.js';
 
@@ -28,6 +29,19 @@ async function main(argv: string[]): Promise<number> {
       await runMcpServer();
       return -1; // keep running; stdio transport owns the process
     }
+    case 'doctor': {
+      const report = await doctor();
+      if (cmd.json) console.log(JSON.stringify(report, null, 2));
+      else printDoctor(report);
+      return report.ok ? 0 : 1;
+    }
+    case 'install': {
+      const code = await installChromium();
+      if (code !== 0) return code;
+      const report = await doctor();
+      printDoctor(report);
+      return report.ok ? 0 : 1;
+    }
     case 'shot': {
       const result = await capture(cmd.options, cmd.json ? {} : { onDevice: printShot });
       if (cmd.json) console.log(JSON.stringify(result, null, 2));
@@ -39,6 +53,19 @@ async function main(argv: string[]): Promise<number> {
 function rel(p: string): string {
   const r = relative(process.cwd(), p);
   return r.startsWith('..') ? p : r;
+}
+
+function printDoctor(r: DoctorReport): void {
+  console.log(`node        ${r.node}`);
+  console.log(`playwright  ${r.playwright}`);
+  console.log(`browsers    ${r.browsersPath}`);
+  if (r.ok) {
+    console.log(`chromium    ok (${r.version})`);
+    return;
+  }
+  console.log(`chromium    ${r.chromium}`);
+  console.error(`rpc: ${r.error}`);
+  if (r.chromium === 'missing') console.error('Run `rpc install` to download it now.');
 }
 
 function printShot(s: DeviceShot): void {

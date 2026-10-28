@@ -1,6 +1,7 @@
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename, extname, resolve } from 'node:path';
-import { chromium, type Browser, type Page } from 'playwright';
+import type { Browser, Page } from 'playwright';
+import { launchBrowser } from './browser.js';
 import { renderFramed, renderSlices, type Segment } from './composite.js';
 import { explainError } from './errors.js';
 import { emulationFor, resolveDevices, type Device } from './devices.js';
@@ -9,6 +10,7 @@ import { pngSize, stitchPngs } from './png.js';
 import { fitsOneCapture, planSegments, planSlices, sliceScale, type SliceSpec } from './slices.js';
 
 export { MAX_CAPTURE_PX } from './slices.js';
+export { launchBrowser } from './browser.js';
 
 export interface ImageFile {
   path: string;
@@ -87,20 +89,6 @@ export interface CaptureHooks {
    * `opts.saveSlices === false`.
    */
   inlineSlices?: boolean;
-}
-
-export async function launchBrowser(): Promise<Browser> {
-  try {
-    return await chromium.launch({ headless: true });
-  } catch (err) {
-    const msg = (err as Error).message;
-    if (/Executable doesn't exist|playwright install/i.test(msg)) {
-      throw new Error(
-        'Playwright Chromium is not installed. Run: npx playwright install chromium'
-      );
-    }
-    throw err;
-  }
 }
 
 export async function capture(opts: ShotOptions, hooks: CaptureHooks = {}): Promise<ShotResult> {

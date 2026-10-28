@@ -11,6 +11,8 @@ export type Command =
   | { command: 'shot'; options: ShotOptions; json: boolean }
   | { command: 'devices'; json: boolean }
   | { command: 'mcp' }
+  | { command: 'doctor'; json: boolean }
+  | { command: 'install' }
   | { command: 'help' }
   | { command: 'version' };
 
@@ -24,6 +26,8 @@ Usage:
   rpc shot <url> [options]   capture screenshots
   rpc devices [--json]       list device ids and aliases
   rpc mcp                    run the MCP server on stdio
+  rpc doctor [--json]        check that Playwright's Chromium is installed and launches
+  rpc install                download Playwright's Chromium (same version rpc uses)
 
 Shot options:
   -d, --devices <ids>        comma-separated device ids or aliases
@@ -61,6 +65,12 @@ export function parseCli(argv: readonly string[]): Command {
       return { command: 'version' };
     case 'mcp':
       return { command: 'mcp' };
+    case 'install':
+      return { command: 'install' };
+    case 'doctor': {
+      const { values } = parse(rest, { json: { type: 'boolean' } }, false);
+      return { command: 'doctor', json: Boolean(values.json) };
+    }
     case 'devices': {
       const { values } = parse(rest, { json: { type: 'boolean' } }, false);
       return { command: 'devices', json: Boolean(values.json) };
