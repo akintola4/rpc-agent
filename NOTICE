@@ -1,0 +1,16 @@
+rpc-agent
+Derived from responsive-point-check (https://github.com/akintola4/responsive-point-check),
+MIT License, Copyright (c) 2026 Akintola Tope.
+
+Device catalog (src/devices.ts) and bezel layout logic (src/bezel.ts) are ported
+from lib/devices.ts and lib/bezel-asset.ts in that repository.
+
+Bezel artwork (assets/bezels/*.svg) is copied unchanged from public/bezels/ in
+that repository and distributed under its MIT license. The SVGs carry no author
+or license metadata of their own; their element ids indicate Figma exports, but
+the original Figma source is not recorded in the upstream repo. Confirm the
+artwork's origin before any public release.
+
+The artwork depicts hardware made by Apple, Google, Samsung and Microsoft.
+Device names and product designs are trademarks of their respective owners.
+This project is not affiliated with or endorsed by any of them.
