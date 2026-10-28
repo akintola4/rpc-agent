@@ -128,6 +128,21 @@ describe('tall page at DPR 3 (stitched)', () => {
   });
 });
 
+describe('reducedMotion', () => {
+  it('emulates prefers-reduced-motion: reduce', async () => {
+    const colour = async (reducedMotion: boolean) => {
+      const r = await capture(
+        { ...defaultShotOptions(`${url}motion.html`), devices: ['desktop-1440'], reducedMotion, outDir: join(OUT, 'motion') },
+        { browser, keepBuffers: true }
+      );
+      const img = decodePng(r.shots[0]!.buffers!.shot!);
+      return [...img.data.subarray(0, 3)];
+    };
+    expect(await colour(false)).toEqual([220, 0, 0]);
+    expect(await colour(true)).toEqual(GREEN);
+  });
+});
+
 describe('MCP screenshot with fullPage', () => {
   it('returns the hero then labelled slices, and says what was skipped', async () => {
     const [clientT, serverT] = InMemoryTransport.createLinkedPair();
