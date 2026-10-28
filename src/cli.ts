@@ -29,9 +29,7 @@ async function main(argv: string[]): Promise<number> {
       return -1; // keep running; stdio transport owns the process
     }
     case 'shot': {
-      const result = await capture(cmd.options, {
-        onDevice: cmd.json ? undefined : printShot,
-      } as Parameters<typeof capture>[1]);
+      const result = await capture(cmd.options, cmd.json ? {} : { onDevice: printShot });
       if (cmd.json) console.log(JSON.stringify(result, null, 2));
       return result.shots.some(s => s.error) ? 1 : 0;
     }
