@@ -10,24 +10,32 @@ Chrome extension. See `NOTICE` for where the artwork comes from.
 
 ## Install
 
-Requires Node 20+ and pnpm. Local only for now; nothing is published.
+Requires Node 20+ and pnpm. Not on npm yet: install from a clone.
 
 ```sh
-git clone <this folder> rpc-agent && cd rpc-agent
+git clone <repo-url> rpc-agent
+cd rpc-agent
 pnpm install
-pnpm exec playwright install chromium
 pnpm build
-pnpm link --global   # optional: puts `rpc` on your PATH
+pnpm exec playwright install chromium   # or: node dist/cli.js install
+node dist/cli.js doctor                 # checks Chromium is installed and launches
 ```
 
-Without the global link, run `node /path/to/rpc-agent/dist/cli.js` wherever
-these docs say `rpc`, or `pnpm rpc` from inside the repo.
+Install Chromium from inside the repo (or with `rpc install`) so the browser
+matches the Playwright version rpc uses. If it's missing, every command says
+so and prints that fix instead of failing with Playwright's own error.
+
+Optionally put `rpc` on your PATH with `pnpm link --global`. Without it, run
+`node /absolute/path/to/rpc-agent/dist/cli.js` wherever these docs say `rpc`,
+or `pnpm rpc` from inside the repo.
 
 ## CLI
 
 ```sh
 rpc shot <url> [options]
 rpc devices [--json]
+rpc doctor [--json]    # is Chromium installed, and does it launch?
+rpc install            # download Chromium with rpc's own Playwright version
 rpc mcp
 ```
 
@@ -35,7 +43,11 @@ rpc mcp
 | --- | --- |
 | `-d, --devices <ids>` | Comma-separated device ids or aliases. Default `iphone-15-pro,desktop-1440` |
 | `-b, --bezels` | Also write a copy framed in the device bezel |
-| `-f, --full-page` | Capture the full scroll height |
+| `-f, --full-page` | Capture the full scroll height, however tall (up to `--max-height`) |
+| `--slices` | With `--full-page`, also write viewport-tall JPEG review slices |
+| `--slice-width <px>` | Maximum slice width. Default 768 |
+| `--max-height <px>` | Full-page cap in CSS px. Default 60000 |
+| `--reduced-motion` | Emulate `prefers-reduced-motion: reduce` |
 | `-o, --out <dir>` | Output directory. Default `./.rpc-shots` |
 | `--wait-for <selector>` | Wait for a visible element before capturing |
 | `--wait <ms>` | Extra settle delay after load |
@@ -50,12 +62,12 @@ local `.html` file.
 
 ```sh
 rpc shot localhost:3000 -d iphone-15,ipad,desktop-1440 --bezels
-rpc shot https://example.com/pricing --full-page --color-scheme dark
+rpc shot https://example.com/pricing --full-page --slices --color-scheme dark
 rpc shot localhost:5173 -d pixel --wait-for '[data-ready]' --json
 ```
 
-Output files are named `<host>[-<path>]-<device>.png`, with
-`-framed.png` added for bezel copies, for example
+Output files are named `<host>[-<path>]-<device>.png`, with `-framed.png`
+for bezel copies and `-slice-NN.jpg` for slices, for example
 `.rpc-shots/localhost-3000-iphone-15.png`. Re-running overwrites them, so the
 paths stay the same between runs.
 
@@ -69,43 +81,101 @@ Aliases: `iphone`, `mobile`, `phone` (iphone-15-pro), `android`, `pixel`
 Each device gets a fresh browser context with its CSS viewport, device pixel
 ratio and, for phones and tablets, a mobile user agent plus touch. The page
 loads, then rpc waits for network idle (up to 10 s, so dev servers with HMR
-sockets don't hang it), web fonts and pending images. CSS animations are
-finished before the shot.
+sockets don't hang it), web fonts and pending images. CSS animations,
+transitions and Web Animations are finished before the shot.
 
 With `--full-page`, rpc first scrolls through the page one viewport at a time
-so lazy images and IntersectionObserver content load. It then scrolls back to
-the top and takes one Playwright full-page capture. Sticky headers appear
-once, at the top, and `100vh` sections keep their real height. Pages taller
-than 16,384 device pixels are cut off at that height and marked `clipped`.
+so lazy images and IntersectionObserver content load, then scrolls back to
+the top. A page that fits in one Chromium capture (16,384 device px) is taken
+in one pass. A taller one is taken as clipped segments of about 8,000 device
+px and stitched into one PNG in Node, with no height limit apart from
+`--max-height` (60,000 CSS px by default; taller pages are cut there and
+marked `clipped`). Both paths render the page as if the viewport were the
+whole document, so sticky headers and fixed elements appear once, at the top,
+and `100vh` sections keep their real height.
 
 Bezels frame the above-the-fold viewport. With `--bezels --full-page` you get
-both files: the full page raw, and the first screen framed.
+both: the full page raw, and the first screen framed.
+
+### When a capture fails
+
+Each device fails on its own, with an `error`, a `code` and usually a `hint`:
+
+```
+x iphone-15 (393x852 @3x): Could not resolve host example.dev (net::ERR_NAME_NOT_RESOLVED)
+   hint: Check the URL for typos. If the host works in a normal browser, this process may be
+   blocked by a sandbox or network allowlist (e.g. the Claude Code sandbox: add the domain to
+   the allowed hosts, or run outside the sandbox). ...
+```
+
+Covered: DNS failures, refused connections (on localhost: "nothing is
+listening on port N"), proxy, tunnel and offline errors, TLS errors (https
+against a plain-http dev server), missing files, redirect loops, navigation
+and `--wait-for` timeouts.
 
 ## MCP server
 
 `rpc mcp` runs an MCP server on stdio with two tools.
 
-`screenshot` takes `url` (required), `devices` (string[]), `bezels`,
-`fullPage`, `waitFor`, `waitMs`, `colorScheme`, `outDir`, `timeoutMs` and
-`inline`. It returns a JSON summary per device: file paths, pixel sizes, HTTP
-status, final URL, page title, scroll height and console errors. With `inline`
-(the default) it also returns a JPEG preview per device, at most 1024 px on
-the long side and usually under 50 KB. Tall pages are cropped to the top of
-the page so the text stays readable; the full PNG is on disk.
+### `screenshot`
 
-`list_devices` takes an optional `category` (`apple-phone`, `android-phone`,
-`tablet`, `laptop`) and returns ids, sizes and aliases.
+| Param | Default | |
+| --- | --- | --- |
+| `url` | required | http(s), file, bare host or local path |
+| `devices` | `["iphone-15-pro", "desktop-1440"]` | ids or aliases |
+| `bezels` | false | framed copy of the first screen |
+| `fullPage` | false | whole page, stitched past 16,384 px |
+| `maxSlices` | 10 | full page: slices returned inline per device |
+| `saveSlices` | auto | full page: `true` always writes slice JPEGs, `false` never; by default they are written only when some were cut by `maxSlices` |
+| `sliceWidth` | 768 | full page: max slice width in px (raise it for small text on desktop) |
+| `maxHeight` | 60000 | full page: CSS px cap |
+| `reducedMotion` | false | emulate `prefers-reduced-motion: reduce` |
+| `waitFor`, `waitMs`, `colorScheme`, `outDir`, `timeoutMs` | | as in the CLI |
+| `inline` | true | return images, not just paths |
+
+The result starts with a plain-text block: one line per device (or the error
+and hint), followed by the JSON summary (file paths, pixel sizes,
+`scrollHeight`, `capturedHeight`, `segments`, `clipped`, `slices`, HTTP status,
+final URL, title, console errors, `error`/`code`/`hint`).
+
+Then the images:
+
+- Without `fullPage`: one JPEG preview per device (the framed shot when
+  `bezels`), at most 1024 px on the long side.
+- With `fullPage`: the framed first screen when `bezels`, labelled
+  `iphone-15 · first screen in bezel`, then the whole page as top-to-bottom
+  slices, each one viewport tall and labelled
+  `iphone-15 · slice 2/7 · y=852–1704 css px`. A three-device review of a
+  typical marketing page is roughly 0.5 MB of JPEG.
+
+When a page has more slices than `maxSlices`, the text says which ones were
+skipped (`slices 11-26 (y=8520-21656 css px) skipped inline`), all slices are
+written to disk and the summary gives their paths and the full PNG, so the
+agent can Read the rest without slicing anything itself.
+
+### `list_devices`
+
+Takes an optional `category` (`apple-phone`, `android-phone`, `tablet`,
+`laptop`) and returns ids, sizes and aliases.
 
 Files go to `outDir`, which is resolved against the server's working
 directory. Claude Code and Cursor start the server in the project root.
 
 ### Claude Code
 
+From the repo folder, after `pnpm build`:
+
 ```sh
-claude mcp add rpc -- node /absolute/path/to/rpc-agent/dist/cli.js mcp
+claude mcp add --scope user rpc -- node "$(pwd)/dist/cli.js" mcp
 ```
 
-Add `--scope user` to make it available in every project.
+The path must be absolute. Drop `--scope user` to add it to the current
+project only. After rebuilding, restart Claude Code (or reconnect with
+`/mcp`) to load the new build.
+
+If you use the Claude Code sandbox, pages on hosts outside its network
+allowlist fail with `ERR_NAME_NOT_RESOLVED` or a proxy error; the hint says
+so. Add the domain to the allowlist.
 
 ### Cursor
 
@@ -125,20 +195,29 @@ Add `--scope user` to make it available in every project.
 ## Development
 
 ```sh
-pnpm test        # vitest: devices, bezel layout, arg parsing, e2e capture
+pnpm test        # vitest: unit tests plus e2e captures of local fixtures
 pnpm typecheck
 pnpm build
-pnpm smoke:mcp   # spawns dist/cli.js mcp and calls both tools
+pnpm smoke:mcp [url] [--full-page] [--devices a,b] [--max-slices n]
 ```
 
-The e2e test serves `test/fixtures/page.html` locally and checks image sizes.
-It also samples pixels to confirm the page sits inside each bezel's screen
-area and that lazy content rendered.
+The e2e tests serve `test/fixtures` locally. `tall.html` is 21,656 CSS px
+(64,968 px at DPR 3): the test checks every row of the stitched PNG against
+the known layout across all seams, that the sticky header and a fixed badge
+appear once, that the IntersectionObserver section rendered, and the slice
+count and labels, including through the MCP server. The missing-browser tests
+point `PLAYWRIGHT_BROWSERS_PATH` at an empty temp dir.
 
 ## Limitations
 
 - Chromium only, portrait only. There is no landscape mode, and none of RPC's
   fake browser chrome bars.
+- Scroll-driven animations are captured in their scroll-top state. Entrance
+  animations that run once are usually fine after the warm-up scroll; ones
+  that reverse when scrolled back (GSAP `toggleActions` with reverse, scrubbed
+  timelines) may show their initial state. `reducedMotion` helps on sites that
+  respect it.
+- Very tall stitched PNGs are big files; review them through the slices.
 - The bezel geometry is RPC's, unchanged. On kind-default phones the page
   covers the dynamic island or notch, and generic monitors are drawn edge to
   edge with only the stand showing.

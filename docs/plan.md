@@ -252,3 +252,11 @@ round trip; e2e on `test/fixtures/tall.html` (21,656 CSS px at DPR 3 =
 64,968 device px) asserting stitched height, alternating band colours across
 every seam, a single header and fixed badge, lazy section revealed; slice
 count and labels through the MCP server over an in-memory transport.
+
+**5. Missing Chromium.** (Added during v0.2.) `launchBrowser()` turns
+Playwright's "Executable doesn't exist" into one message with the fix
+(`npx playwright install chromium` in the rpc folder, or `rpc install`). The
+MCP tool returns it as a tool error and the server keeps running. `rpc
+doctor` launches Chromium to check it; `rpc install` runs this package's own
+`playwright install chromium`. Tested by pointing `PLAYWRIGHT_BROWSERS_PATH`
+at an empty temp dir. Package stays `"private": true` (GitHub, not npm).
