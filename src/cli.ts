@@ -49,8 +49,18 @@ function printShot(s: DeviceShot): void {
     return;
   }
   const lines = [`ok ${label}${s.status && s.status >= 400 ? ` HTTP ${s.status}` : ''}`];
-  if (s.shot) lines.push(`   ${rel(s.shot.path)}  ${s.shot.width}x${s.shot.height}${s.clipped ? ' (clipped)' : ''}`);
+  if (s.shot) {
+    const extra = [
+      s.segments && s.segments > 1 ? `${s.segments} segments stitched` : '',
+      s.clipped ? `clipped at ${s.capturedHeight} of ${s.scrollHeight} css px` : '',
+    ].filter(Boolean);
+    lines.push(`   ${rel(s.shot.path)}  ${s.shot.width}x${s.shot.height}${extra.length ? ` (${extra.join(', ')})` : ''}`);
+  }
   if (s.framed) lines.push(`   ${rel(s.framed.path)}  ${s.framed.width}x${s.framed.height}`);
+  if (s.slices?.saved && s.slices.items[0]?.path) {
+    const first = rel(s.slices.items[0].path);
+    lines.push(`   ${first.replace(/-slice-\d+\.jpg$/, '-slice-NN.jpg')}  ${s.slices.total} slice(s), ${s.slices.items[0].width}px wide`);
+  }
   if (s.consoleErrors?.length) lines.push(`   ${s.consoleErrors.length} console error(s), first: ${s.consoleErrors[0]}`);
   console.log(lines.join('\n'));
 }

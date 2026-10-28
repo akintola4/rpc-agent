@@ -1,14 +1,14 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename, extname, resolve } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
-import { renderFramed } from './composite.js';
+import { renderFramed, renderSlices, type Segment } from './composite.js';
 import { explainError } from './errors.js';
 import { emulationFor, resolveDevices, type Device } from './devices.js';
 import type { ShotOptions } from './options.js';
-import { pngSize } from './png.js';
+import { pngSize, stitchPngs } from './png.js';
+import { fitsOneCapture, planSegments, planSlices, sliceScale, type SliceSpec } from './slices.js';
 
-/** Chromium can't produce a bitmap taller than this in one capture. */
-export const MAX_CAPTURE_PX = 16_384;
+export { MAX_CAPTURE_PX } from './slices.js';
 
 export interface ImageFile {
   path: string;
@@ -27,8 +27,14 @@ export interface DeviceShot {
   framed?: ImageFile;
   /** Document scroll height in CSS px. */
   scrollHeight?: number;
-  /** Full-page capture hit MAX_CAPTURE_PX and was cut off. */
+  /** Full page: CSS px actually captured (scrollHeight, or maxHeight when clipped). */
+  capturedHeight?: number;
+  /** Full page: number of capture segments stitched together (1 = single capture). */
+  segments?: number;
+  /** Full page: the page is taller than maxHeight and the shot stops there. */
   clipped?: boolean;
+  /** Full page: review slices that were rendered (inline and/or saved). */
+  slices?: SliceSet;
   status?: number | null;
   finalUrl?: string;
   title?: string;
@@ -41,7 +47,26 @@ export interface DeviceShot {
   /** What to do about the failure. */
   hint?: string;
   /** In-memory buffers for callers that want them (MCP previews). */
-  buffers?: { shot?: Buffer; framed?: Buffer };
+  buffers?: { shot?: Buffer; framed?: Buffer; slices?: Buffer[] };
+}
+
+export interface SliceInfo extends SliceSpec {
+  /** JPEG on disk, when slices were saved. */
+  path?: string;
+  /** Output size in px. */
+  width: number;
+  pxHeight: number;
+}
+
+export interface SliceSet {
+  /** Slices the whole captured page divides into. */
+  total: number;
+  /** CSS px per slice (the viewport height). */
+  sliceHeight: number;
+  /** The slices rendered, top first: the first maxSlices, or all when saved. */
+  items: SliceInfo[];
+  /** True when slice files were written to disk. */
+  saved: boolean;
 }
 
 export interface ShotResult {
@@ -56,6 +81,12 @@ export interface CaptureHooks {
   onDevice?: (shot: DeviceShot) => void;
   /** Keep image buffers on the result (default false). */
   keepBuffers?: boolean;
+  /**
+   * Render the first `opts.maxSlices` full-page slices for inline use (MCP).
+   * When the page has more, all slices are saved to disk unless
+   * `opts.saveSlices === false`.
+   */
+  inlineSlices?: boolean;
 }
 
 export async function launchBrowser(): Promise<Browser> {
@@ -83,7 +114,7 @@ export async function capture(opts: ShotOptions, hooks: CaptureHooks = {}): Prom
     for (const device of devices) {
       let shot: DeviceShot;
       try {
-        shot = await captureDevice(browser, device, opts, outDir);
+        shot = await captureDevice(browser, device, opts, outDir, hooks);
       } catch (err) {
         shot = baseShot(device);
         const e = explainError(err, { url: opts.url, timeoutMs: opts.timeoutMs, waitFor: opts.waitFor });
@@ -114,7 +145,8 @@ async function captureDevice(
   browser: Browser,
   device: Device,
   opts: ShotOptions,
-  outDir: string
+  outDir: string,
+  hooks: CaptureHooks
 ): Promise<DeviceShot> {
   const emu = opts.emulate ? emulationFor(device) : undefined;
   const context = await browser.newContext({
@@ -124,6 +156,7 @@ async function captureDevice(
     hasTouch: emu?.hasTouch ?? false,
     ...(emu?.userAgent ? { userAgent: emu.userAgent } : {}),
     ...(opts.colorScheme ? { colorScheme: opts.colorScheme } : {}),
+    ...(opts.reducedMotion ? { reducedMotion: 'reduce' as const } : {}),
     ignoreHTTPSErrors: true, // self-signed local dev certs
   });
   const result = baseShot(device);
@@ -143,7 +176,7 @@ async function captureDevice(
       await page.waitForSelector(opts.waitFor, { state: 'visible', timeout: opts.timeoutMs });
     }
     if (opts.fullPage) {
-      await warmUpScroll(page);
+      await warmUpScroll(page, opts.maxHeight);
       await settle(page, opts.timeoutMs);
     }
     if (opts.waitMs > 0) await page.waitForTimeout(opts.waitMs);
@@ -162,22 +195,61 @@ async function captureDevice(
     }
 
     let shotPng: Buffer;
+    let segments: Segment[] | undefined;
     if (opts.fullPage) {
-      const maxCss = Math.floor(MAX_CAPTURE_PX / device.dpr);
-      result.clipped = result.scrollHeight > maxCss;
-      shotPng = await page.screenshot({
-        ...shotOpts,
-        fullPage: true,
-        ...(result.clipped
-          ? { clip: { x: 0, y: 0, width: device.width, height: maxCss } }
-          : {}),
-      });
+      const total = Math.min(result.scrollHeight, opts.maxHeight);
+      result.clipped = result.scrollHeight > opts.maxHeight;
+      result.capturedHeight = total;
+      if (fitsOneCapture(total, device.dpr) && !result.clipped) {
+        // One pass, as in v0.1: no seams, Playwright sizes it.
+        shotPng = await page.screenshot({ ...shotOpts, fullPage: true });
+        segments = [{ y: 0, height: total, png: shotPng }];
+      } else {
+        // Clipped full-page captures render exactly what one tall capture
+        // would (sticky/fixed elements at their scroll-0 position, nothing
+        // scrolls), so the segments stitch without repeated headers.
+        const width = Math.max(device.width, await page.evaluate<number>(SCROLL_WIDTH_JS));
+        segments = [];
+        for (const band of planSegments(total, device.dpr)) {
+          const png = await page.screenshot({
+            ...shotOpts,
+            fullPage: true,
+            clip: { x: 0, y: band.y, width, height: band.height },
+          });
+          segments.push({ ...band, png });
+        }
+        shotPng = await stitchPngs(segments.map(s => s.png));
+      }
+      result.segments = segments.length;
     } else {
       shotPng = viewportPng!;
     }
 
     result.shot = await save(resolve(outDir, `${base}.png`), shotPng);
     result.buffers = { shot: shotPng };
+
+    if (segments && (opts.saveSlices || hooks.inlineSlices)) {
+      const cssWidth = result.shot.width / device.dpr;
+      const scale = sliceScale(cssWidth, device.dpr, opts.sliceWidth);
+      const all = planSlices(device.id, result.capturedHeight!, device.height);
+      const save =
+        opts.saveSlices === true ||
+        (opts.saveSlices === undefined && Boolean(hooks.inlineSlices) && all.length > opts.maxSlices);
+      const wanted = save ? all : all.slice(0, opts.maxSlices);
+      const rendered = await renderSlices(browser, segments, wanted, cssWidth, scale);
+      if (save) await removeOldSlices(outDir, base);
+      const items: SliceInfo[] = [];
+      for (const { data, ...info } of rendered) {
+        const item: SliceInfo = { ...info };
+        if (save) {
+          item.path = resolve(outDir, `${base}-slice-${String(info.index).padStart(2, '0')}.jpg`);
+          await writeFile(item.path, data);
+        }
+        items.push(item);
+      }
+      result.slices = { total: all.length, sliceHeight: device.height, items, saved: save };
+      result.buffers.slices = rendered.map(r => r.data);
+    }
 
     if (opts.bezels && viewportPng) {
       const framedPng = await renderFramed(browser, device, viewportPng);
@@ -189,6 +261,14 @@ async function captureDevice(
     await context.close();
   }
   return result;
+}
+
+/** Drop `<stem>-slice-NN.jpg` files from earlier runs so a shorter page doesn't leave stale slices. */
+async function removeOldSlices(outDir: string, base: string): Promise<void> {
+  const prefix = `${base}-slice-`; // base is a [a-z0-9-] slug
+  for (const f of await readdir(outDir)) {
+    if (f.startsWith(prefix) && /^\d+\.jpg$/.test(f.slice(prefix.length))) await rm(resolve(outDir, f), { force: true });
+  }
 }
 
 async function save(path: string, png: Buffer): Promise<ImageFile> {
@@ -215,22 +295,24 @@ const WAIT_FOR_ASSETS_JS = `(async () => {
  * Walk the page one viewport at a time so loading="lazy" images and
  * IntersectionObserver-driven content render, then return to the top.
  * Replaces the 120 ms per-segment pause in RPC's scroll-and-stitch.
- * Bounded to 40 steps / 30k CSS px.
+ * Bounded to 100 steps and the full-page height cap.
  */
-const WARM_UP_SCROLL_JS = `(async () => {
+const warmUpScrollJs = (maxHeight: number) => `(async () => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const root = document.scrollingElement || document.documentElement;
-  const step = Math.max(200, Math.floor(window.innerHeight * 0.8));
-  for (let i = 0, y = 0; i < 40 && y < 30000; i++, y += step) {
+  const step = Math.max(200, Math.floor(window.innerHeight * 0.9));
+  for (let i = 0, y = 0; i < 100 && y < ${maxHeight}; i++, y += step) {
     if (y > root.scrollHeight - window.innerHeight) break;
     window.scrollTo({ top: y, behavior: 'instant' });
-    await sleep(120);
+    await sleep(100);
   }
-  window.scrollTo({ top: root.scrollHeight, behavior: 'instant' });
+  window.scrollTo({ top: Math.min(root.scrollHeight, ${maxHeight}), behavior: 'instant' });
   await sleep(150);
   window.scrollTo({ top: 0, behavior: 'instant' });
   await sleep(150);
 })()`;
+
+const SCROLL_WIDTH_JS = `Math.max(document.documentElement.scrollWidth, document.body ? document.body.scrollWidth : 0)`;
 
 const SCROLL_HEIGHT_JS = `Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)`;
 
@@ -245,8 +327,8 @@ async function settle(page: Page, timeoutMs: number): Promise<void> {
   await page.evaluate(WAIT_FOR_ASSETS_JS).catch(() => {});
 }
 
-async function warmUpScroll(page: Page): Promise<void> {
-  await page.evaluate(WARM_UP_SCROLL_JS);
+async function warmUpScroll(page: Page, maxHeight: number): Promise<void> {
+  await page.evaluate(warmUpScrollJs(Math.round(maxHeight)));
 }
 
 /** `<host>[-<path>]-<device>`, e.g. `localhost-3000-about-iphone-15`. */

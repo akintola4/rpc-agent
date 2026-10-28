@@ -29,7 +29,12 @@ Shot options:
   -d, --devices <ids>        comma-separated device ids or aliases
                              (default: iphone-15-pro,desktop-1440)
   -b, --bezels               frame each shot in its device bezel
-  -f, --full-page            capture the full scroll height
+  -f, --full-page            capture the full scroll height (stitched, any height)
+      --slices               with --full-page: also write viewport-tall JPEG
+                             review slices (<stem>-slice-NN.jpg)
+      --slice-width <px>     max slice width (default: 768)
+      --max-height <px>      full-page cap in CSS px (default: 60000)
+      --reduced-motion       emulate prefers-reduced-motion: reduce
   -o, --out <dir>            output directory (default: ./.rpc-shots)
       --wait-for <selector>  wait for a CSS selector before capturing
       --wait <ms>            extra settle delay after load (default: 0)
@@ -80,6 +85,10 @@ function parseShot(args: string[]): Command {
       'color-scheme': { type: 'string' },
       timeout: { type: 'string' },
       'no-emulate': { type: 'boolean' },
+      slices: { type: 'boolean' },
+      'slice-width': { type: 'string' },
+      'max-height': { type: 'string' },
+      'reduced-motion': { type: 'boolean' },
       json: { type: 'boolean' },
     },
     true
@@ -118,6 +127,14 @@ function parseShot(args: string[]): Command {
     options.colorScheme = s as ColorScheme;
   }
   if (values['no-emulate']) options.emulate = false;
+  if (values.slices) options.saveSlices = true;
+  if (values['reduced-motion']) options.reducedMotion = true;
+  if (typeof values['slice-width'] === 'string') {
+    options.sliceWidth = parseInt_('--slice-width', values['slice-width'], 256, 4096);
+  }
+  if (typeof values['max-height'] === 'string') {
+    options.maxHeight = parseInt_('--max-height', values['max-height'], 500, 200_000);
+  }
 
   return { command: 'shot', options, json: Boolean(values.json) };
 }
@@ -134,6 +151,12 @@ function parse<T extends Spec>(args: string[], options: T, allowPositionals: boo
 
 function splitList(s: string): string[] {
   return s.split(',').map(x => x.trim()).filter(Boolean);
+}
+
+function parseInt_(flag: string, raw: string, min: number, max: number): number {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < min || n > max) throw new ArgError(`${flag} must be an integer from ${min} to ${max}`);
+  return n;
 }
 
 function parseMs(flag: string, raw: string): number {

@@ -2,6 +2,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
 import { DEFAULT_DEVICES } from './devices.js';
+import { DEFAULT_MAX_HEIGHT } from './slices.js';
 
 export type ColorScheme = 'light' | 'dark' | 'no-preference';
 export const COLOR_SCHEMES: readonly ColorScheme[] = ['light', 'dark', 'no-preference'];
@@ -18,7 +19,23 @@ export interface ShotOptions {
   timeoutMs: number;
   /** Mobile UA + touch for phones/tablets. False = viewport + DPR only. */
   emulate: boolean;
+  /** Emulate prefers-reduced-motion: reduce. */
+  reducedMotion: boolean;
+  /** Full-page cap in CSS px; taller pages are cut off and marked clipped. */
+  maxHeight: number;
+  /**
+   * Write full-page review slices (`<stem>-slice-NN.jpg`) to disk.
+   * Undefined = only when inline slices were cut by maxSlices (MCP).
+   */
+  saveSlices?: boolean | undefined;
+  /** Inline slices per device (MCP). */
+  maxSlices: number;
+  /** Slice JPEG width cap, px. */
+  sliceWidth: number;
 }
+
+export const DEFAULT_MAX_SLICES = 10;
+export const DEFAULT_SLICE_WIDTH = 768;
 
 export const DEFAULT_OUT_DIR = '.rpc-shots';
 export const DEFAULT_TIMEOUT_MS = 30_000;
@@ -33,6 +50,10 @@ export function defaultShotOptions(url: string): ShotOptions {
     waitMs: 0,
     timeoutMs: DEFAULT_TIMEOUT_MS,
     emulate: true,
+    reducedMotion: false,
+    maxHeight: DEFAULT_MAX_HEIGHT,
+    maxSlices: DEFAULT_MAX_SLICES,
+    sliceWidth: DEFAULT_SLICE_WIDTH,
   };
 }
 

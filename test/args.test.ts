@@ -29,6 +29,10 @@ describe('parseCli', () => {
       waitMs: 0,
       timeoutMs: 30000,
       emulate: true,
+      reducedMotion: false,
+      maxHeight: 60000,
+      maxSlices: 10,
+      sliceWidth: 768,
     });
   });
 
@@ -43,6 +47,10 @@ describe('parseCli', () => {
       '--color-scheme', 'dark',
       '--timeout', '5000',
       '--no-emulate',
+      '--slices',
+      '--slice-width', '1200',
+      '--max-height', '30000',
+      '--reduced-motion',
       '--json'
     );
     expect(json).toBe(true);
@@ -57,6 +65,11 @@ describe('parseCli', () => {
       colorScheme: 'dark',
       timeoutMs: 5000,
       emulate: false,
+      reducedMotion: true,
+      maxHeight: 30000,
+      saveSlices: true,
+      maxSlices: 10,
+      sliceWidth: 1200,
     });
   });
 
@@ -73,6 +86,8 @@ describe('parseCli', () => {
     expect(() => shot('a.com', '--color-scheme', 'sepia')).toThrow(/color-scheme/);
     expect(() => shot('a.com', '--wait', '-5')).toThrow(ArgError);
     expect(() => shot('a.com', '--bogus')).toThrow(ArgError);
+    expect(() => shot('a.com', '--max-height', '10')).toThrow(/--max-height/);
+    expect(() => shot('a.com', '--slice-width', 'wide')).toThrow(/--slice-width/);
   });
 });
 

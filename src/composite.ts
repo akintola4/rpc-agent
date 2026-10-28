@@ -1,6 +1,7 @@
 import type { Browser, Page } from 'playwright';
 import { bezelLayoutFor, loadBezelSvg } from './bezel.js';
 import type { Device } from './devices.js';
+import type { Band, SliceSpec } from './slices.js';
 
 /** Any origin works; requests to it never leave the process (page.route). */
 const ORIGIN = 'http://rpc-compositor.invalid';
@@ -9,26 +10,28 @@ const ORIGIN = 'http://rpc-compositor.invalid';
 export const MAX_FRAMED_PX = 4096;
 
 /**
- * Serve `html` at ORIGIN/ and `image` at ORIGIN/shot.png from a throwaway
- * page, then run `fn`. Routing avoids stuffing multi-MB data: URLs into
- * setContent.
+ * Serve `html` at ORIGIN/ and `images` at ORIGIN/shot.png (the first) and
+ * ORIGIN/img/<n>.png from a throwaway page, then run `fn`. Routing avoids
+ * stuffing multi-MB data: URLs into setContent.
  */
 async function withStage<T>(
   browser: Browser,
   viewport: { width: number; height: number },
   deviceScaleFactor: number,
   html: string,
-  image: Buffer,
+  images: Buffer | Buffer[],
   fn: (page: Page) => Promise<T>
 ): Promise<T> {
+  const list = Array.isArray(images) ? images : [images];
   const context = await browser.newContext({ viewport, deviceScaleFactor });
   try {
     const page = await context.newPage();
     await page.route(`${ORIGIN}/**`, route => {
       const path = new URL(route.request().url()).pathname;
-      if (path === '/shot.png') {
-        return route.fulfill({ status: 200, contentType: 'image/png', body: image });
-      }
+      const m = /^\/img\/(\d+)\.png$/.exec(path);
+      const img = path === '/shot.png' ? list[0] : m ? list[Number(m[1])] : undefined;
+      if (img) return route.fulfill({ status: 200, contentType: 'image/png', body: img });
+      if (path !== '/') return route.fulfill({ status: 404 });
       return route.fulfill({ status: 200, contentType: 'text/html', body: html });
     });
     await page.goto(`${ORIGIN}/`);
@@ -115,4 +118,73 @@ export async function renderPreview(
     page.locator('#c').screenshot({ type: 'jpeg', quality })
   );
   return { data, width, height, cropped };
+}
+
+export interface Segment extends Band {
+  png: Buffer;
+}
+
+export interface RenderedSlice extends SliceSpec {
+  data: Buffer;
+  /** Output size in px. */
+  width: number;
+  pxHeight: number;
+}
+
+/**
+ * Render review slices (JPEG) from full-page capture segments. The segments
+ * are stacked at preview scale in one compositor page and each slice is a
+ * clipped view of that stack, so neither the page nor any slice ever needs a
+ * bitmap taller than a single segment.
+ *
+ * `cssWidth` is the captured width in CSS px; `scale` is output px per CSS px.
+ */
+export async function renderSlices(
+  browser: Browser,
+  segments: Segment[],
+  slices: SliceSpec[],
+  cssWidth: number,
+  scale: number,
+  quality = 70
+): Promise<RenderedSlice[]> {
+  if (slices.length === 0) return [];
+  const width = Math.max(1, Math.round(cssWidth * scale));
+  const maxH = Math.max(...slices.map(s => Math.round(s.height * scale)));
+  const imgs = segments
+    .map(
+      (seg, i) =>
+        // Whole-pixel edges so adjacent segments meet without a blended seam row.
+        `<img src="/img/${i}.png" alt="" style="position:absolute;left:0;top:${Math.round(seg.y * scale)}px;` +
+        `width:${width}px;height:${Math.round((seg.y + seg.height) * scale) - Math.round(seg.y * scale)}px">`
+    )
+    .join('');
+  const html = `<!doctype html><html><head><style>
+  html,body{margin:0;background:#fff}
+  #c{position:relative;width:${width}px;height:${maxH}px;overflow:hidden}
+  #s{position:absolute;left:0;top:0;width:${width}px}
+  img{display:block}
+</style></head><body><div id="c"><div id="s">${imgs}</div></div></body></html>`;
+
+  return withStage(
+    browser,
+    { width, height: maxH },
+    1,
+    html,
+    segments.map(s => s.png),
+    async page => {
+      const out: RenderedSlice[] = [];
+      for (const slice of slices) {
+        const pxHeight = Math.max(1, Math.round(slice.height * scale));
+        await page.evaluate(
+          `(() => {
+            document.getElementById('c').style.height = '${pxHeight}px';
+            document.getElementById('s').style.transform = 'translateY(${-Math.round(slice.y * scale)}px)';
+          })()`
+        );
+        const data = await page.locator('#c').screenshot({ type: 'jpeg', quality });
+        out.push({ ...slice, data, width, pxHeight });
+      }
+      return out;
+    }
+  );
 }
