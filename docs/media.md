@@ -10,78 +10,64 @@ pnpm media --fresh        # re-capture the sites first
 pnpm media --only gif     # or: hero, slices
 ```
 
-Needs ffmpeg on PATH and network access for the captures. Captures and
+Needs ffmpeg and python3 on PATH, and network access for the captures. Captures and
 frames go to `.media-cache/` (gitignored); only the final files are committed.
-
-## Plan: the 0.3 demo GIF
-
-The GIF still shows the 0.2 `ok` output in a 280 px pane. The new version
-shows the real 0.3 terminal UI, full frame, then the devices it produced.
-
-Storyboard (about 16 s at 20 fps):
-
-1. `$ rpc` typed with no arguments. The block-letter banner and the `rpc`
-   badge appear, then the prompts are answered at typing speed: URL
-   `hello-greetings.vercel.app`, the device list (untick iPhone 15 Pro, tick
-   iPhone 15; iPad Air 11" and Desktop 1440 stay ticked), bezels on, the
-   Capture Summary box, `Proceed with capture?` yes.
-2. Chromium starts, each device's spinner turns into a `◇` line with its
-   status and time, then the Results table, the green `Captured 3 devices`
-   box, the re-run command and `Done!`. Held long enough to read.
-3. The terminal fades out and the three framed shots rise in (the current
-   scene, scaled up to the new frame).
-4. If the length and size budgets allow: the full-page capture scrolling
-   inside the iPhone bezel, with the command as a caption instead of a
-   second terminal.
-
-Capture: `rpc` runs in a real pseudo-terminal (a small stdlib Python bridge,
-since Node has no pty without a native module), 96 columns by 26 rows.
-build.ts sends the keystrokes when each prompt appears and records every
-output chunk with its time to `.media-cache/interactive.json`. `--fresh`
-re-records it. The probe for a local dev server is stubbed out for the
-recording so the run is the same on every machine.
-
-Rendering: the chunks go through `@xterm/headless` (devDependency), so
-cursor moves, clack's in-place redraws and spinner frames resolve exactly as
-in a terminal. Each kept screen state becomes a grid of cells. Every
-character sits in a fixed 1ch cell, so fallback glyphs (`◇`, `✓`, `×`)
-can't shift a column, and box-drawing and block characters are drawn as
-masks that fill the whole cell, so rails, box borders and the banner join up
-with no gaps between rows. Long waits (Chromium start, each 15-20 s capture)
-are cut to a few spinner frames; typing and prompt redraws keep their order.
-The scrollback scrolls smoothly when output passes the bottom row.
-
-Layout and budget: 1000x640, terminal window filling the frame with 15 px
-text (about 13 px at GitHub's README width). Neutral grey page behind a dark
-terminal, so one file works in light and dark. Under 5 MB, 12-18 s loop,
-same ffmpeg two-pass palette. Scene 4 is dropped if it pushes either budget.
 
 ## What it makes
 
 | File | What |
 | --- | --- |
 | `hero-light.png`, `hero-dark.png` | iPhone 15, iPad Air 11" and Desktop 1440 framed shots side by side, transparent background, 1920 px wide (2x). The README picks one with `<picture>` and `prefers-color-scheme`. |
-| `demo.gif` | 13 s loop, 960x540, 20 fps: the three-device command and its output, the framed results, then a full-page capture scrolling inside the iPhone bezel. |
+| `demo.gif` | 16.6 s loop, 1056x660, 20 fps: `rpc` run with no arguments in a terminal (banner, prompts, spinners, Results table, `Captured 3 devices`, `Done!`), then the three framed shots it wrote. |
 | `terminal-shot.png`, `terminal-error.png` | `rpc shot` in an interactive terminal (0.3), for a working site and for a host that doesn't resolve. Not built by `pnpm media`; see below. |
 | `mcp-slices-light.png`, `mcp-slices-dark.png` | The first five labelled review slices the MCP `screenshot` tool returns for a full page. |
 
 ## Approach
 
-The GIF is not a screen recording. The build runs the two `rpc shot` commands
-for real, keeps their stdout and output files, then lays everything out in an
-HTML page that has a `render(t)` function. Playwright steps `t` frame by frame
-and screenshots each one, and ffmpeg turns the frames into a GIF.
+The GIF is not a screen recording. It's drawn from a recording of the real
+CLI, frame by frame:
+
+1. **Record.** build.ts runs `rpc` with no arguments in a 108x28
+   pseudo-terminal and answers the prompts the way a person would: types
+   `hello-greetings.vercel.app`, unticks iPhone 15 Pro and ticks iPhone 15
+   in the device list (iPad Air 11" and Desktop 1440 stay ticked), keeps
+   bezels on, confirms. Each keystroke waits for its prompt to appear.
+   Every output chunk is saved with its time to
+   `.media-cache/interactive.json`, and the run writes the device shots the
+   GIF ends on. Node can't open a pty without a native module, so
+   `scripts/media/pty_bridge.py` (standard library only) holds the terminal
+   and pipes bytes both ways. `scripts/media/no-dev-server.mjs` is preloaded
+   so the "Found a dev server" probe finds nothing, whatever the recording
+   machine has running on port 3000.
+2. **Replay.** The chunks go through `@xterm/headless`, a terminal emulator
+   with no screen, so clack's cursor moves, in-place prompt redraws and
+   spinner frames end up exactly as a terminal would show them. Gaps are cut
+   to 0.4 s, each spinner keeps its first five frames (a real capture takes
+   15-20 s per device), and when a box or a new prompt lands, the screen
+   before it stays up for at least half a second.
+3. **Draw.** Each screen state becomes HTML in a page with a `render(t)`
+   function. Every terminal cell is a fixed 9x20 px box, so a glyph from a
+   fallback font (`◇`, `✓`, `×`) can't push the next column along, and the
+   box-drawing and block characters (`│ ╮ ═ ╗ █`…) are SVG masks that fill
+   the whole cell. That's why the rail, the box borders and the banner join
+   up between rows, which they don't when a browser draws them as text. The
+   scrollback eases up instead of jumping a line at a time.
+4. **Encode.** Playwright steps `t` frame by frame and screenshots each one,
+   and ffmpeg turns the frames into a GIF.
+
+The `$ rpc` line at the top is the only thing not printed by rpc: it stands
+in for the shell echoing what was typed.
 
 Why this over the alternatives:
 
-- **VHS** (`.tape` to GIF) and **asciinema + agg** record a terminal only. The
-  point of rpc is the images it produces, which a terminal can't show, and a
-  live run takes 30-80 s of network waiting that would need cutting out.
+- **VHS** (`.tape` to GIF) and **asciinema + agg** record a terminal only.
+  The GIF ends on the images rpc writes, which a terminal can't show, and a
+  live run has a minute of network waiting that would need cutting out.
 - **Playwright `recordVideo`** gives a webm at the page's real frame timing,
   which then has to be trimmed and re-encoded, and runs are never identical.
-- Rendering from a timeline is deterministic: same inputs, same frames. Text
-  is drawn at 1x so it stays sharp after palette reduction, and only the parts
-  that change between frames are re-encoded.
+- Rendering from a timeline is deterministic: same recording, same frames.
+  Text is drawn at 1x so it stays sharp after palette reduction, and only
+  the parts that change between frames are re-encoded.
 
 Encoding is ffmpeg's two-pass palette: `palettegen=stats_mode=diff`, then
 `paletteuse=dither=none:diff_mode=rectangle`. gifski was also tried. At its
@@ -91,7 +77,8 @@ for no visible difference on this content. Without dithering, the flat UI colour
 stay flat and compress well.
 
 Size targets: under 5 MB (the GIF is about 2 MB) and about the README column
-width (GitHub shows it at up to roughly 880 px). The GIF uses a neutral light
+width. GitHub shows it at up to roughly 880 px, which puts the 15 px
+terminal text at about 13 px. The GIF uses a neutral light
 grey background so one file works in both themes; the PNGs are cheap enough
 to ship a light and a dark copy. An MP4 would be smaller, but GitHub only plays
 video uploaded as an attachment, not one committed to the repo, and it doesn't
@@ -99,23 +86,22 @@ autoplay. A GIF autoplays and loops anywhere the README is rendered.
 
 ## Changing it
 
-Timings live in the `timeline` object in `gif()`, layout in the stage HTML
-next to it. The demo commands are in `RUNS`; if you change a site, update the
-file stems below them. After a change, look at a few frames:
+Scene timings live in the `timeline` object in `gif()`, the replay pacing in
+its `playback()` call, and layout in the stage HTML next to it. The scripted
+answers are in `STEPS`; after changing them (or the CLI's output), run
+`pnpm media --fresh` to record again. If you change a site, update the file
+stems too. After a change, look at a few frames:
 
 ```sh
-ffmpeg -i docs/media/demo.gif -vf "fps=20,select='eq(n\,40)+eq(n\,100)+eq(n\,200)',tile=3x1" -frames:v 1 /tmp/frames.png
+ffmpeg -i docs/media/demo.gif -vf "fps=20,select='eq(n\,56)+eq(n\,240)+eq(n\,300)',tile=1x3" -frames:v 1 /tmp/frames.png
 ```
 
 ## Terminal screenshots
 
 `terminal-shot.png` and `terminal-error.png` are real runs of the built CLI
-in a pseudo-terminal (92 columns), so they show the rich output a person
-sees, not the plain output that `pnpm media` records. The raw output was
-replayed through a terminal emulator (`pyte`), turned into coloured HTML and
-screenshotted with Playwright at 2x. The block-letter banner is left out:
-browsers draw box-drawing and block glyphs with gaps that a terminal
-doesn't have.
-
-The GIF still shows the plain output. That's what an agent sees, and the
-rich output is too tall for its 280 px terminal.
+in a pseudo-terminal (92 columns), made by hand before the GIF had its own
+recorder. The raw output was replayed through a terminal emulator (`pyte`),
+turned into coloured HTML and screenshotted with Playwright at 2x. The
+block-letter banner is left out there, because those screenshots draw the
+box-drawing and block glyphs as text, which leaves gaps between rows. The
+GIF's cell masks don't have that problem.
