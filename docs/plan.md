@@ -196,3 +196,59 @@ publishing to npm.
 5. MCP server + smoke script. Commit.
 6. README. Commit.
 7. Verify: CLI on fixture and example.com, inspect PNGs, MCP smoke, tests, typecheck.
+
+## v0.2 changes
+
+Driven by the first real use (an agent reviewing a deployed portfolio on
+iphone-15, ipad and desktop-1440 with bezels + full page).
+
+**1. Actionable navigation errors.** A new `errors.ts` maps Playwright /
+Chromium failures to `{ error, code, hint }`. `code` is the `net::ERR_*` name,
+`TIMEOUT`, `WAIT_FOR_TIMEOUT` or `UNKNOWN`. Hints cover DNS failures
+(misspelt host, or the host is blocked by a sandbox / network allowlist such
+as the Claude Code sandbox: nslookup can resolve while the sandboxed process
+cannot), refused connections (dev server not running on that port for local
+hosts; firewall / allowlist otherwise), proxy / tunnel / offline errors,
+TLS errors (https against a plain-http dev server), missing files and
+navigation timeouts. Each device fails on its own; `DeviceShot` gains `code`
+and `hint`. The CLI prints the hint under the error, and the MCP result
+starts with a plain-text line per failed device before the JSON.
+
+**2. Full-page review in one MCP call.** With `fullPage`, the `screenshot`
+tool returns the whole page as top-to-bottom JPEG slices, each one viewport
+tall, at most `sliceWidth` px wide (default 768), labelled
+`iphone-15 · slice 2/7 · y=852–1704 css px`. With bezels, the framed first
+screen comes first as the hero image. `maxSlices` (default 10 per device)
+caps the inline payload; when slices are cut the summary says which y range
+was skipped, all slices are written to disk, and the paths are listed.
+`saveSlices: true` always writes `<stem>-slice-NN.jpg` files. Slicing math
+(`planSlices`) is pure and unit tested; slices are rendered in the existing
+compositor page from the capture segments, so no image ever has to fit a
+canvas. Non-full-page behaviour is unchanged. CLI: `--slices`,
+`--max-slices`, `--slice-width`.
+
+**3. No 16,384 px height limit.** Experiment: `page.screenshot({ fullPage:
+true, clip })` with a clip that starts beyond 16,384 device px works in
+Chromium and renders exactly what the single full-page capture would
+(captureBeyondViewport: sticky headers sit at their scroll-0 position, fixed
+elements appear once, nothing scrolls). So tall pages are captured as clipped
+segments of at most ~8,000 device px each (segment height chosen so each
+boundary is a whole device pixel) and stitched in Node: a small PNG decoder /
+encoder on `node:zlib` (8-bit RGB/RGBA, non-interlaced: what Chromium
+emits), streaming rows into one deflate stream so peak memory is about one
+segment. No sharp, no canvas size limit. Pages that fit in one capture still
+use a single capture. Absolute cap: 60,000 CSS px (`maxHeight`), reported
+with `clipped: true` and `capturedHeight`. The warm-up scroll now covers the
+full capped height (step one viewport, 100 steps max).
+
+**4. Animations.** Optional `reducedMotion` (`--reduced-motion`) emulates
+`prefers-reduced-motion: reduce`, which makes Framer Motion and most GSAP
+setups skip entrance animations. Playwright's `animations: 'disabled'`
+already finishes CSS animations/transitions and WAAPI before each capture.
+Nothing more invasive.
+
+Tests: unit tests for error mapping, slice planning and PNG encode/decode
+round trip; e2e on `test/fixtures/tall.html` (21,656 CSS px at DPR 3 =
+64,968 device px) asserting stitched height, alternating band colours across
+every seam, a single header and fixed badge, lazy section revealed; slice
+count and labels through the MCP server over an in-memory transport.
