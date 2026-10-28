@@ -8,13 +8,24 @@ import {
 } from './options.js';
 
 export type Command =
-  | { command: 'shot'; options: ShotOptions; json: boolean }
+  | { command: 'shot'; options: ShotOptions; json: boolean; open: boolean }
   | { command: 'devices'; json: boolean }
   | { command: 'mcp' }
   | { command: 'doctor'; json: boolean }
   | { command: 'install' }
-  | { command: 'help' }
+  | { command: 'help'; topic?: HelpTopic }
   | { command: 'version' };
+
+export const HELP_TOPICS = ['shot', 'devices', 'doctor', 'install', 'mcp'] as const;
+export type HelpTopic = (typeof HELP_TOPICS)[number];
+
+function isTopic(s: string | undefined): s is HelpTopic {
+  return (HELP_TOPICS as readonly string[]).includes(s ?? '');
+}
+
+function wantsHelp(args: readonly string[]): boolean {
+  return args.includes('--help') || args.includes('-h');
+}
 
 export class ArgError extends Error {
   override name = 'ArgError';
@@ -46,6 +57,10 @@ Shot options:
       --timeout <ms>         navigation timeout (default: 30000)
       --no-emulate           viewport + DPR only (no mobile UA / touch)
       --json                 print the result as JSON
+      --open                 open the output folder when done
+
+Run \`rpc help <command>\` for one command's options and examples.
+Run \`rpc\` with no arguments in a terminal for an interactive capture.
 
 Examples:
   rpc shot localhost:3000 -d iphone-15,ipad,desktop-1440 --bezels
@@ -58,20 +73,28 @@ export function parseCli(argv: readonly string[]): Command {
     case undefined:
     case 'help':
     case '-h':
-    case '--help':
-      return { command: 'help' };
+    case '--help': {
+      const topic = rest[0];
+      if (topic === undefined) return { command: 'help' };
+      if (!isTopic(topic)) throw new ArgError(`No help for "${topic}". Topics: ${HELP_TOPICS.join(', ')}`);
+      return { command: 'help', topic };
+    }
     case '-v':
     case '--version':
       return { command: 'version' };
     case 'mcp':
+      if (wantsHelp(rest)) return { command: 'help', topic: 'mcp' };
       return { command: 'mcp' };
     case 'install':
+      if (wantsHelp(rest)) return { command: 'help', topic: 'install' };
       return { command: 'install' };
     case 'doctor': {
+      if (wantsHelp(rest)) return { command: 'help', topic: 'doctor' };
       const { values } = parse(rest, { json: { type: 'boolean' } }, false);
       return { command: 'doctor', json: Boolean(values.json) };
     }
     case 'devices': {
+      if (wantsHelp(rest)) return { command: 'help', topic: 'devices' };
       const { values } = parse(rest, { json: { type: 'boolean' } }, false);
       return { command: 'devices', json: Boolean(values.json) };
     }
@@ -83,6 +106,7 @@ export function parseCli(argv: readonly string[]): Command {
 }
 
 function parseShot(args: string[]): Command {
+  if (wantsHelp(args)) return { command: 'help', topic: 'shot' };
   const { values, positionals } = parse(
     args,
     {
@@ -100,6 +124,7 @@ function parseShot(args: string[]): Command {
       'max-height': { type: 'string' },
       'reduced-motion': { type: 'boolean' },
       json: { type: 'boolean' },
+      open: { type: 'boolean' },
     },
     true
   );
@@ -146,7 +171,7 @@ function parseShot(args: string[]): Command {
     options.maxHeight = parseInt_('--max-height', values['max-height'], 500, 200_000);
   }
 
-  return { command: 'shot', options, json: Boolean(values.json) };
+  return { command: 'shot', options, json: Boolean(values.json), open: Boolean(values.open) };
 }
 
 type Spec = NonNullable<Parameters<typeof parseArgs>[0]>['options'];
