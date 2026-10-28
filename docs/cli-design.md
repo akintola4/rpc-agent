@@ -104,8 +104,9 @@ Colour, separately:
 - `FORCE_COLOR` (anything but `0`) turns colour on for the plain output too
   (`ok` green, `x` red, `hint:` yellow), e.g. for coloured CI logs. The
   layout stays plain.
-- Clack 1.x colours through `node:util` `styleText`, which follows the same
-  two variables, so its own symbols agree with ours.
+- Both set: `FORCE_COLOR` wins. That's Node's own precedence, and clack 1.x
+  colours its symbols through `node:util` `styleText`, so following Node
+  keeps clack's symbols and our text in agreement.
 
 ## Dependencies
 
