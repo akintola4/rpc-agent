@@ -257,7 +257,7 @@ export function capturedLines(result: ShotResult, c: Colors): string[] {
   const out: string[] = [];
   const width = textWidth();
   const paths = result.shots.flatMap(s => [s.shot?.path, s.framed?.path].filter((x): x is string => Boolean(x)));
-  const pathW = Math.min(Math.max(0, ...paths.map(x => rel(x).length)), width - 24);
+  const pathW = Math.min(Math.max(0, ...paths.map(x => rel(x).length)), width - 18);
   const file = (path: string, w: number, h: number, extra = '') => {
     const meta = [`${w}×${h}`, size(path), extra].filter(Boolean).join(' · ');
     out.push(`${c.green('✓')} ${padAnsi(c.cyan(rel(path)), pathW)}  ${c.dim(meta)}`);
