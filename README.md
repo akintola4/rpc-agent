@@ -36,7 +36,7 @@ or `pnpm rpc` from inside the repo.
 
 ## CLI
 
-![rpc shot capturing three devices with bezels, then a full-page capture scrolling inside an iPhone frame](docs/media/demo.gif)
+![rpc run with no arguments: the banner, prompts for the URL, devices and bezels, a spinner per device, a results table and the list of files written, then the three framed screenshots](docs/media/demo.gif)
 
 ```sh
 rpc                    # interactive: pick a URL, devices and options

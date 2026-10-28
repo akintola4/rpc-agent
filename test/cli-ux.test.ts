@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -196,6 +196,28 @@ describe('rich renderers', () => {
     );
     expect(lines[0]).toBe('✗ iphone-15-pro, desktop-1440');
     expect(lines.filter(l => l.includes('hint:'))).toHaveLength(1);
+  });
+
+  it('lines up the size column in the captured box when dimensions differ in length', () => {
+    const dir = join(ROOT, '.rpc-shots', 'ux-align-test');
+    mkdirSync(dir, { recursive: true });
+    try {
+      const shot = (device: string, w: number, h: number, kb: number) => {
+        const path = join(dir, `${device}.png`);
+        writeFileSync(path, Buffer.alloc(kb * 1024));
+        return fakeShot({ device, status: 200, consoleErrors: [], shot: { path, width: w, height: h } });
+      };
+      const lines = capturedLines(
+        { url: 'https://example.com/', outDir: dir, shots: [shot('iphone-15', 1179, 2556, 158), shot('desktop-1440', 1440, 900, 72)] },
+        plain
+      );
+      const rows = lines.filter(l => l.startsWith('✓'));
+      expect(rows).toHaveLength(2);
+      expect(new Set(rows.map(l => l.search(/\d+×\d+/))).size).toBe(1);
+      expect(new Set(rows.map(l => l.indexOf(' · '))).size).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('prints a shot command that parses back to the same options', () => {

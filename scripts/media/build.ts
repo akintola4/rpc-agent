@@ -4,20 +4,20 @@
 //   pnpm media --fresh      # re-capture the demo sites first
 //   pnpm media --only gif   # hero | gif | slices
 //
-// Needs ffmpeg on PATH. Captures hit the live demo sites, so they need network.
-// See docs/media.md for why it works this way.
+// Needs ffmpeg and python3 on PATH. Captures hit the live demo sites, so they
+// need network. See docs/media.md for why it works this way.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import type { Browser } from 'playwright';
-import { bezelLayoutFor, loadBezelSvg } from '../../src/bezel.js';
 import { launchBrowser } from '../../src/browser.js';
 import { resolveDevice } from '../../src/devices.js';
 import { pngSize } from '../../src/png.js';
 import { DEFAULT_MAX_SLICES } from '../../src/options.js';
 import { planSlices } from '../../src/slices.js';
+import { BOX_CHARS, TERM_BG, TERM_FG, playback, record, type Recording } from './terminal.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CACHE = join(ROOT, '.media-cache');
@@ -31,12 +31,30 @@ const { values } = parseArgs({
 });
 const only = values.only;
 
-/** The two commands the GIF replays. They are run for real, from CACHE. */
+/** Plain run for the MCP slices image. Run for real, from CACHE. */
 const RUNS = {
-  devices: ['shot', 'hello-greetings.vercel.app', '-d', 'iphone-15,ipad,desktop-1440', '--bezels'],
   fullPage: ['shot', 'devakintola.com', '-d', 'iphone-15', '--full-page', '--slices'],
 } as const;
 type RunName = keyof typeof RUNS;
+
+/**
+ * The GIF's terminal scene: `rpc` with no arguments in a 108x28 pseudo-terminal,
+ * answered like a person would. It writes the three device shots (and framed
+ * copies) that the hero and the GIF's device scene use.
+ */
+const TERM = { cols: 108, rows: 28 };
+const DEMO_URL = 'hello-greetings.vercel.app';
+const UP = '\x1b[A';
+const STEPS = [
+  { when: /Which URL/, pause: 500, keys: [...DEMO_URL], gap: 45 },
+  { when: /hello-greetings\.vercel\.app/, pause: 300, keys: ['\r'], gap: 0 },
+  // iPhone 15 Pro, iPad Air 11 and Desktop 1440 are preselected, cursor on
+  // the 15 Pro: untick it, go up two to iphone-15, tick that.
+  { when: /Which devices/, pause: 700, keys: [' ', UP, UP, ' '], gap: 360 },
+  { when: /◼ iphone-15 /, pause: 450, keys: ['\r'], gap: 0 },
+  { when: /Options/, pause: 600, keys: ['\r'], gap: 0 },
+  { when: /Proceed with capture/, pause: 800, keys: ['\r'], gap: 0 },
+];
 
 const DEVICE_STEMS = {
   phone: 'hello-greetings-vercel-app-iphone-15',
@@ -65,6 +83,25 @@ function capture(name: RunName): string {
   }
 }
 
+async function recordInteractive(): Promise<Recording> {
+  const file = join(CACHE, 'interactive.json');
+  if (!values.fresh && existsSync(file)) return JSON.parse(readFileSync(file, 'utf8')) as Recording;
+  const cli = join(ROOT, 'dist', 'cli.js');
+  if (!existsSync(cli)) throw new Error('dist/cli.js is missing: run pnpm build first');
+  const stub = join(ROOT, 'scripts', 'media', 'no-dev-server.mjs');
+  for (let attempt = 1; ; attempt++) {
+    console.log(`recording: rpc (interactive, ${TERM.cols}x${TERM.rows})`);
+    const rec = await record([process.execPath, '--import', pathToFileURL(stub).href, cli], { ...TERM, cwd: CACHE, steps: STEPS });
+    const text = rec.events.map(e => e[2]).join('');
+    if (rec.exitCode === 0 && text.includes('Captured 3 devices')) {
+      writeFileSync(file, JSON.stringify(rec));
+      return rec;
+    }
+    if (attempt === 3) throw new Error(`interactive rpc failed (exit ${rec.exitCode})`);
+    console.log(`  attempt ${attempt} failed, retrying`);
+  }
+}
+
 // ---------------------------------------------------------------- helpers
 
 function ffmpeg(args: string[]): void {
@@ -84,13 +121,6 @@ function kb(path: string): string {
 
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function bezelSvg(deviceId: string): string {
-  const layout = bezelLayoutFor(resolveDevice(deviceId));
-  return loadBezelSvg(layout.src).replace(/<svg\b[^>]*>/, tag =>
-    tag.replace(/\s(width|height)="[^"]*"/g, '').replace('<svg', '<svg style="position:absolute;inset:0;width:100%;height:100%"')
-  );
 }
 
 async function screenshot(browser: Browser, html: string, size: { width: number; height: number }, dpr: number, out: string, omitBackground = false) {
@@ -165,146 +195,144 @@ async function hero(browser: Browser) {
 
 const FPS = 20;
 
-async function gif(browser: Browser, logs: Record<RunName, string>) {
-  const W = 960, H = 540;
-  const row = deviceRow(W, 1, 1);
+// Terminal cell, px. Box-drawing masks below are drawn on this grid.
+const CW = 9, LH = 20;
+const BOX_PATHS: Record<string, string> = {
+  '│': 'M4.5 0V20', '─': 'M0 10.5H9',
+  '┌': 'M9 10.5H4.5V20', '┐': 'M0 10.5H4.5V20', '└': 'M4.5 0V10.5H9', '┘': 'M4.5 0V10.5H0',
+  '├': 'M4.5 0V20M4.5 10.5H9', '┤': 'M4.5 0V20M4.5 10.5H0', '┬': 'M0 10.5H9M4.5 10.5V20',
+  '┴': 'M0 10.5H9M4.5 10.5V0', '┼': 'M0 10.5H9M4.5 0V20',
+  '╭': 'M9 10.5H8.5Q4.5 10.5 4.5 14.5V20', '╮': 'M0 10.5H0.5Q4.5 10.5 4.5 14.5V20',
+  '╰': 'M4.5 0V6.5Q4.5 10.5 8.5 10.5H9', '╯': 'M4.5 0V6.5Q4.5 10.5 0.5 10.5H0',
+  '═': 'M0 8.5H9M0 12.5H9', '║': 'M2.5 0V20M6.5 0V20',
+  '╔': 'M9 8.5H2.5V20M9 12.5H6.5V20', '╗': 'M0 8.5H6.5V20M0 12.5H2.5V20',
+  '╚': 'M2.5 0V12.5H9M6.5 0V8.5H9', '╝': 'M6.5 0V12.5H0M2.5 0V8.5H0',
+};
 
-  // Scene B phone: bezel SVG plus the stitched full-page PNG scrolled inside the screen rect.
-  const phone = bezelLayoutFor(resolveDevice('iphone-15'));
-  const phoneH = 468;
-  const ps = phoneH / phone.outerHeight;
-  const fullPng = join(SHOTS, `${FULL_STEM}.png`);
-  const fullSize = pngSize(readFileSync(fullPng));
-  const pageCss = Math.round(fullSize.height / 3);
-  const screenW = Math.round(phone.screen.width * ps);
-  const fullSrc = resized(fullPng, screenW, 'full.png');
-  const fullDisplayH = Math.round((fullSize.height * screenW) / fullSize.width);
-  const screenH = Math.round(phone.screen.height * ps);
+/** CSS for the box-drawing cells: each one is a mask over currentColor that fills its cell. */
+function boxCss(): string {
+  return [...BOX_CHARS].map((ch, i) => {
+    const body = ch === '█'
+      ? `<rect width="${CW}" height="${LH}"/>`
+      : `<path d="${BOX_PATHS[ch]}" fill="none" stroke="#000" stroke-width="1"/>`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${CW}" height="${LH}" viewBox="0 0 ${CW} ${LH}">${body}</svg>`;
+    return `.k${i}{-webkit-mask-image:url("data:image/svg+xml,${encodeURIComponent(svg)}")}`;
+  }).join('\n');
+}
 
-  const termLines = (name: RunName) =>
-    logs[name].trimEnd().split('\n').filter(l => !/console error/.test(l));
-  const cmdA = `rpc ${RUNS.devices.join(' ')}`;
-  const cmdB = `rpc ${RUNS.fullPage.join(' ')}`;
-  const segs = /\((\d+) segments stitched\)/.exec(logs.fullPage)?.[1] ?? '?';
-  const slices = /(\d+) slice\(s\)/.exec(logs.fullPage)?.[1] ?? '?';
+async function gif(browser: Browser, rec: Recording) {
+  const PAD_X = 22, PAD_TOP = 12, PAD_BOTTOM = 16, BAR = 32, MARGIN = 20;
+  const termW = PAD_X * 2 + TERM.cols * CW;
+  const termH = BAR + PAD_TOP + TERM.rows * LH + PAD_BOTTOM;
+  const W = termW + MARGIN * 2, H = termH + MARGIN * 2;
+
+  // Scenes 1-2: the recorded session. "$ rpc" is typed first, as a shell would echo it.
+  const prompt = '\x1b[32m$\x1b[39m ';
+  const pre: [number, string][] = [[0, prompt], [0.45, 'r'], [0.55, 'p'], [0.65, 'c'], [0.95, '\r\n']];
+  const pb = await playback(rec, { pre, start: 1.0, maxGap: 0.4, blockGap: 0.5, spinFrames: 5 });
+
+  // Scene 3: the framed devices.
+  const row = deviceRow(W, 1.15, 1);
+  const rowH = Math.max(...row.map(d => d.h));
+  const base = Math.round((H - rowH - 34) / 2) + rowH;
 
   // Seconds. Each scene fades out to the background before the next fades in,
   // and the last frame fades to the background so the loop seam is clean.
-  const CPS = 50; // typing speed
+  const done = pb.end;
   const timeline = {
-    typeA: [0.3, 0.3 + cmdA.length / CPS],
-    outA: 2.1,
-    termOutA: [3.6, 3.9],
-    devIn: 3.95,
-    aOut: [6.0, 6.3],
-    bIn: [6.3, 6.6],
-    typeB: [6.7, 6.7 + cmdB.length / CPS],
-    outB: 8.2,
-    phoneIn: 8.4,
-    scroll: [9.0, 12.0],
-    end: [12.6, 13.0],
-    total: 13.0,
+    termIn: [0, 0.25],
+    termOut: [done + 2.3, done + 2.6],
+    devIn: done + 2.65,
+    end: [done + 5.0, done + 5.3],
+    total: done + 5.3,
+    typed: 0.95,
   };
 
   const html = `<!doctype html><html><head><style>
   html,body{margin:0;width:${W}px;height:${H}px;overflow:hidden;background:#eceef1}
   *{box-sizing:border-box}
-  .term{position:absolute;background:#0d1015;border-radius:10px;box-shadow:0 10px 30px rgba(15,20,30,.18);overflow:hidden}
-  .bar{height:30px;display:flex;align-items:center;gap:7px;padding:0 13px;background:#171b22}
+  .term{position:absolute;left:${MARGIN}px;top:${MARGIN}px;width:${termW}px;height:${termH}px;background:${TERM_BG};border-radius:10px;
+    box-shadow:0 6px 18px rgba(15,20,30,.16);overflow:hidden}
+  .bar{height:${BAR}px;display:flex;align-items:center;gap:7px;padding:0 13px;background:#171b22}
   .bar i{width:11px;height:11px;border-radius:50%;background:#3a3f48;display:block}
-  .body{padding:14px 18px;font:13px/1.62 ${FONT_MONO};color:#d7dde5;white-space:pre-wrap;word-break:break-all}
-  .p{color:#7ee2a8}.ok{color:#7ee2a8}.dim{color:#7d8794}.cur{display:inline-block;width:8px;height:15px;background:#d7dde5;vertical-align:-2px}
+  .bar span{position:absolute;left:0;right:0;text-align:center;font:500 12px/1 ${FONT_UI};color:#7d8794}
+  .screen{position:absolute;left:${PAD_X}px;top:${BAR + PAD_TOP}px;width:${TERM.cols * CW}px;height:${TERM.rows * LH}px;overflow:hidden}
+  #rows{position:absolute;left:0;top:0;width:100%}
+  .r{--cw:${CW}px;height:${LH}px;white-space:nowrap;font:15px/${LH}px ${FONT_MONO};color:${TERM_FG};
+    -webkit-font-smoothing:antialiased;font-variant-ligatures:none}
+  .r b,.r s{display:inline-block;width:${CW}px;height:${LH}px;vertical-align:top;text-align:center;font-weight:400;text-decoration:none;overflow:visible}
+  .r .k{background-color:currentColor;-webkit-mask-size:${CW}px ${LH}px;-webkit-mask-repeat:no-repeat}
+  ${boxCss()}
+  #cur{position:absolute;width:${CW}px;height:${LH}px;background:${TERM_FG}}
   .d{position:absolute;display:block}
-  .l{position:absolute;font:500 12.5px/1 ${FONT_UI};color:#57606a;text-align:center;white-space:nowrap}
-  #phone{position:absolute;width:${Math.round(phone.outerWidth * ps)}px;height:${phoneH}px}
-  #screen{position:absolute;left:${Math.round(phone.screen.x * ps)}px;top:${Math.round(phone.screen.y * ps)}px;width:${screenW}px;height:${screenH}px;
-    border-radius:${Math.round(phone.screen.radius * ps)}px;overflow:hidden;background:#000;z-index:2}
-  #screen img{position:absolute;left:0;top:0;width:${screenW}px;height:${fullDisplayH}px}
-  .cap{position:absolute;font:600 22px/1.25 ${FONT_UI};color:#1f2328;letter-spacing:-.01em}
-  .sub{position:absolute;font:13.5px/1.5 ${FONT_MONO};color:#57606a}
-  .track{position:absolute;width:4px;border-radius:2px;background:#d3d7dd}
-  .thumb{position:absolute;left:0;width:4px;border-radius:2px;background:#1f2328}
+  .l{position:absolute;font:500 14px/1 ${FONT_UI};color:#57606a;text-align:center;white-space:nowrap}
   </style></head><body>
   <div id="A">
-    <div class="term" id="termA" style="left:70px;top:80px;width:820px;height:280px">
-      <div class="bar"><i></i><i></i><i></i></div><div class="body" id="bodyA"></div>
+    <div class="term" id="term">
+      <div class="bar"><i></i><i></i><i></i><span>rpc — ${TERM.cols}×${TERM.rows}</span></div>
+      <div class="screen"><div id="rows"></div><div id="cur"></div></div>
     </div>
-    ${row.map(d => `<img class="d dev" src="${d.src}" style="left:${d.x}px;top:${450 - d.h}px;width:${d.w}px;height:${d.h}px">
-      <div class="l dev" style="left:${d.x - 40}px;top:472px;width:${d.w + 80}px">${esc(d.label)}</div>`).join('')}
-  </div>
-  <div id="B">
-    <div class="term" style="left:36px;top:56px;width:624px;height:200px">
-      <div class="bar"><i></i><i></i><i></i></div><div class="body" id="bodyB" style="font-size:12px"></div>
-    </div>
-    <div class="cap" style="left:40px;top:316px">Full page, no height limit</div>
-    <div class="sub" style="left:40px;top:358px;width:560px">${pageCss.toLocaleString('en-US')} css px tall, ${segs} segments stitched,<br>${slices} labelled review slices for the agent</div>
-    <div class="sub" id="ypos" style="left:40px;top:424px;color:#1f2328"></div>
-    <div id="phone" style="left:${W - 58 - Math.round(phone.outerWidth * ps)}px;top:${Math.round((H - phoneH) / 2)}px">
-      <div style="position:absolute;inset:0;z-index:1">${bezelSvg('iphone-15')}</div>
-      <div id="screen"><img id="full" src="${fullSrc}"></div>
-    </div>
-    <div class="track" style="left:${W - 38}px;top:${Math.round((H - phoneH) / 2) + 20}px;height:${phoneH - 40}px">
-      <div class="thumb" id="thumb"></div>
-    </div>
+    ${row.map(d => `<img class="d dev" src="${d.src}" style="left:${d.x}px;top:${base - d.h}px;width:${d.w}px;height:${d.h}px">
+      <div class="l dev" style="left:${d.x - 40}px;top:${base + 24}px;width:${d.w + 80}px">${esc(d.label)}</div>`).join('')}
   </div>
   <script>
   const T = ${JSON.stringify(timeline)};
-  const A = { cmd: ${JSON.stringify(cmdA)}, out: ${JSON.stringify(termLines('devices'))} };
-  const B = { cmd: ${JSON.stringify(cmdB)}, out: ${JSON.stringify(termLines('fullPage'))} };
-  const PAGE = ${pageCss}, SCREEN_H = ${screenH}, IMG_H = ${fullDisplayH}, TRACK = ${phoneH - 40};
+  const LINES = ${JSON.stringify(pb.lines)};
+  const SNAPS = ${JSON.stringify(pb.snaps)};
+  const ROWS = ${TERM.rows}, LH = ${LH}, CW = ${CW}, SCROLL = 0.28;
   const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
   const prog = (t, a, b) => clamp((t - a) / (b - a));
   const out3 = p => 1 - Math.pow(1 - p, 3);
-  const inOut = p => p < .5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
-  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
-  function fmt(line) {
-    if (/^ok /.test(line)) return '<span class="ok">ok</span>' + esc(line.slice(2));
-    return '<span class="dim">' + esc(line) + '</span>';
+  // Scrollback position: eases to each new top row instead of jumping a line at a time.
+  function scrollAt(t) {
+    let from = SNAPS[0].top, to = from, st = -1;
+    for (const s of SNAPS) {
+      if (s.t > t) break;
+      if (s.top !== to) {
+        from = st < 0 ? to : from + (to - from) * out3(prog(s.t, st, st + SCROLL));
+        to = s.top; st = s.t;
+      }
+    }
+    return st < 0 ? to : from + (to - from) * out3(prog(t, st, st + SCROLL));
   }
-  function term(el, t, s, typeAt, outAt) {
-    const n = Math.floor(prog(t, typeAt[0], typeAt[1]) * s.cmd.length);
-    const typing = t < typeAt[1] + 0.25;
-    const blink = Math.floor(t * 2.5) % 2 === 0;
-    let h = '<span class="p">$</span> ' + esc(s.cmd.slice(0, n));
-    if (typing) h += '<span class="cur" style="opacity:' + (blink || t > typeAt[0] ? 1 : 0) + '"></span>';
-    const shown = t < outAt ? 0 : Math.min(s.out.length, 1 + Math.floor((t - outAt) / 0.11));
-    if (shown) h += '\\n' + s.out.slice(0, shown).map(fmt).join('\\n');
-    el.innerHTML = h;
+  let shown = '';
+  function term(t) {
+    let i = 0;
+    while (i + 1 < SNAPS.length && SNAPS[i + 1].t <= t) i++;
+    const s = SNAPS[i];
+    const y = scrollAt(t);
+    const top = Math.floor(y);
+    const key = i + ':' + top;
+    if (key !== shown) {
+      let h = '';
+      for (let r = top; r <= top + ROWS; r++) h += '<div class="r">' + (r < s.rows.length ? LINES[s.rows[r]] : '') + '</div>';
+      document.getElementById('rows').innerHTML = h;
+      shown = key;
+    }
+    document.getElementById('rows').style.transform = 'translateY(' + (-Math.round((y - top) * LH)) + 'px)';
+    // The shell cursor while "rpc" is typed; the CLI draws its own after that.
+    const cur = document.getElementById('cur');
+    const typed = Math.min(3, Math.max(0, Math.floor((t - 0.35) / 0.1)));
+    cur.style.display = t < T.typed && (t < 0.4 || t > 0.45 || Math.floor(t * 2.5) % 2 === 0) ? '' : 'none';
+    cur.style.left = ((2 + typed) * CW) + 'px';
+    cur.style.top = '0px';
   }
   window.render = t => {
-    const a = document.getElementById('A'), b = document.getElementById('B');
-    const aOut = prog(t, T.aOut[0], T.aOut[1]), bIn = prog(t, T.bIn[0], T.bIn[1]);
-    a.style.opacity = String(1 - aOut);
-    a.style.display = aOut >= 1 ? 'none' : '';
-    b.style.opacity = String(bIn * (1 - prog(t, T.end[0], T.end[1])));
-    b.style.display = bIn <= 0 ? 'none' : '';
-    // scene A
-    const ta = document.getElementById('termA');
-    const fade = out3(prog(t, T.termOutA[0], T.termOutA[1]));
-    ta.style.opacity = String(Math.min(prog(t, 0, 0.3), 1 - fade));
-    ta.style.transform = 'translateY(' + (-16 * fade) + 'px) scale(' + (1 - 0.03 * fade) + ')';
-    term(document.getElementById('bodyA'), t, A, T.typeA, T.outA);
-    document.querySelectorAll('#A .dev').forEach((el, i) => {
-      const p = out3(prog(t, T.devIn + Math.floor(i / 2) * 0.14, T.devIn + Math.floor(i / 2) * 0.14 + 0.55));
-      el.style.opacity = String(p);
-      el.style.transform = 'translateY(' + Math.round(24 * (1 - p)) + 'px)';
+    document.getElementById('A').style.opacity = String(1 - prog(t, T.end[0], T.end[1]));
+    // scenes 1-2
+    const el = document.getElementById('term');
+    const fade = out3(prog(t, T.termOut[0], T.termOut[1]));
+    el.style.opacity = String(Math.min(prog(t, T.termIn[0], T.termIn[1]), 1 - fade));
+    el.style.transform = fade ? 'translateY(' + (-16 * fade) + 'px) scale(' + (1 - 0.03 * fade) + ')' : '';
+    el.style.display = fade >= 1 ? 'none' : '';
+    if (fade < 1) term(t);
+    // scene 3
+    document.querySelectorAll('#A .dev').forEach((d, i) => {
+      const k = Math.floor(i / 2) * 0.14;
+      const p = out3(prog(t, T.devIn + k, T.devIn + k + 0.55));
+      d.style.opacity = String(p);
+      d.style.transform = 'translateY(' + Math.round(24 * (1 - p)) + 'px)';
     });
-    // scene B
-    term(document.getElementById('bodyB'), t, B, T.typeB, T.outB);
-    const ph = out3(prog(t, T.phoneIn, T.phoneIn + 0.55));
-    const phone = document.getElementById('phone');
-    phone.style.opacity = String(ph);
-    phone.style.transform = 'translateY(' + Math.round(24 * (1 - ph)) + 'px)';
-    const s = inOut(prog(t, T.scroll[0], T.scroll[1]));
-    const y = Math.round(s * (IMG_H - SCREEN_H));
-    document.getElementById('full').style.transform = 'translateY(' + (-y) + 'px)';
-    const thumbH = Math.max(14, Math.round(TRACK * SCREEN_H / IMG_H));
-    const th = document.getElementById('thumb');
-    th.style.height = thumbH + 'px';
-    th.style.top = Math.round(s * (TRACK - thumbH)) + 'px';
-    th.parentElement.style.opacity = String(ph);
-    const css = Math.round(s * (PAGE - ${resolveDevice('iphone-15').height}));
-    document.getElementById('ypos').textContent = t >= T.phoneIn ? 'y = ' + css.toLocaleString('en-US') + ' / ' + PAGE.toLocaleString('en-US') : '';
   };
   </script></body></html>`;
 
@@ -316,6 +344,7 @@ async function gif(browser: Browser, logs: Record<RunName, string>) {
   const page = await ctx.newPage();
   await page.goto(pathToFileURL(file).href);
   await page.waitForFunction('Array.from(document.images).every(i => i.complete)');
+  await page.evaluate('document.fonts.ready');
   const n = Math.round(timeline.total * FPS);
   for (let i = 0; i < n; i++) {
     await page.evaluate(`window.render(${i / FPS})`);
@@ -332,7 +361,7 @@ async function gif(browser: Browser, logs: Record<RunName, string>) {
     '-vf', 'split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle',
     '-loop', '0', out,
   ]);
-  console.log(`${out}  ${kb(out)}  (${n} frames, ${timeline.total}s @ ${FPS} fps)`);
+  console.log(`${out}  ${kb(out)}  (${n} frames, ${timeline.total.toFixed(1)}s @ ${FPS} fps, ${W}x${H})`);
 }
 
 // ---------------------------------------------------------------- MCP slices
@@ -385,11 +414,12 @@ async function slicesImage(browser: Browser) {
 
 mkdirSync(STAGE, { recursive: true });
 mkdirSync(OUT, { recursive: true });
-const logs = { devices: capture('devices'), fullPage: capture('fullPage') };
+const rec = await recordInteractive();
+capture('fullPage');
 const browser = await launchBrowser();
 try {
   if (!only || only === 'hero') await hero(browser);
-  if (!only || only === 'gif') await gif(browser, logs);
+  if (!only || only === 'gif') await gif(browser, rec);
   if (!only || only === 'slices') await slicesImage(browser);
 } finally {
   await browser.close();
