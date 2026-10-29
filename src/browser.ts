@@ -2,11 +2,7 @@ import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { chromium, type Browser } from 'playwright';
-
-/** Repo/package root (one level above src/ and dist/). */
-export const PACKAGE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const require = createRequire(import.meta.url);
 
@@ -19,11 +15,15 @@ export function playwrightVersion(): string {
   return (JSON.parse(readFileSync(require.resolve('playwright/package.json'), 'utf8')) as { version: string }).version;
 }
 
-/** The exact commands that fix a missing browser, for messages. */
+/**
+ * The command that fixes a missing browser. `rpc install` runs this package's
+ * own Playwright CLI, so the downloaded Chromium matches the version rpc
+ * launches, whether rpc came from npx, a global install or a clone.
+ */
 export function installHint(): string {
   return (
-    `Fix: run \`npx playwright install chromium\` inside ${PACKAGE_DIR} ` +
-    `(or \`node ${resolve(PACKAGE_DIR, 'dist', 'cli.js')} install\`, which uses the same Playwright version as rpc).`
+    'Fix: run `npx rpc-agent install` (or `rpc install` if rpc is on your PATH). ' +
+    `It downloads Chromium for Playwright ${playwrightVersion()}, the version rpc uses.`
   );
 }
 
@@ -83,7 +83,11 @@ export async function doctor(): Promise<DoctorReport> {
 /** Run `playwright install chromium` with this package's Playwright, streaming its output. */
 export function installChromium(): Promise<number> {
   return new Promise((res, rej) => {
-    const child = spawn(process.execPath, [playwrightCli(), 'install', 'chromium'], { stdio: 'inherit' });
+    // Load the CLI through -e with a plain argv[1]. Under npx the real path is
+    // in the `_npx` cache, and Playwright then prints a box telling the user
+    // to install their project's dependencies, which doesn't apply here.
+    const loader = `process.argv.splice(1, 0, 'playwright'); require(${JSON.stringify(playwrightCli())});`;
+    const child = spawn(process.execPath, ['-e', loader, 'install', 'chromium'], { stdio: 'inherit' });
     child.on('error', rej);
     child.on('exit', code => res(code ?? 1));
   });

@@ -31,8 +31,8 @@ describe('missing Chromium', () => {
     const r = rpc(['shot', 'test/fixtures/page.html', '-d', 'iphone', '-o', join(EMPTY, 'out')]);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/^rpc: Playwright's Chromium is not installed \(expected .*rpc-no-browsers-/);
-    expect(r.stderr).toContain('npx playwright install chromium');
-    expect(r.stderr).toContain(`node ${resolve(ROOT, 'dist', 'cli.js')} install`);
+    expect(r.stderr).toContain('npx rpc-agent install');
+    expect(r.stderr).toContain('rpc install');
     expect(r.stderr).not.toContain('╔');
   });
 
@@ -41,7 +41,7 @@ describe('missing Chromium', () => {
     expect(r.status).toBe(1);
     const report = JSON.parse(r.stdout);
     expect(report).toMatchObject({ ok: false, chromium: 'missing', browsersPath: EMPTY });
-    expect(report.fix).toContain('npx playwright install chromium');
+    expect(report.fix).toContain('npx rpc-agent install');
   });
 
   it('rpc doctor passes with the real browser', () => {
@@ -67,7 +67,7 @@ describe('missing Chromium', () => {
       expect(res.isError).toBe(true);
       const text = (res.content as Array<{ text: string }>)[0]!.text;
       expect(text).toMatch(/^Could not start the browser: Playwright's Chromium is not installed/);
-      expect(text).toContain('npx playwright install chromium');
+      expect(text).toContain('npx rpc-agent install');
       // Still serving after the failure.
       const list = await client.callTool({ name: 'list_devices', arguments: {} });
       expect(list.isError).toBeFalsy();

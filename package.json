@@ -1,20 +1,42 @@
 {
   "name": "rpc-agent",
-  "version": "0.3.0",
-  "private": true,
+  "version": "0.3.1",
   "description": "Screenshot a URL at device viewports, optionally framed in device bezels. CLI and MCP server for AI coding agents.",
-  "type": "module",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "playwright",
+    "claude-code",
+    "cursor",
+    "screenshot",
+    "responsive",
+    "device-mockup",
+    "cli"
+  ],
+  "homepage": "https://github.com/akintola4/rpc-agent#readme",
+  "bugs": {
+    "url": "https://github.com/akintola4/rpc-agent/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/akintola4/rpc-agent.git"
+  },
   "license": "MIT",
+  "author": "akintola4",
+  "type": "module",
   "bin": {
     "rpc": "./dist/cli.js"
   },
   "files": [
     "dist",
     "assets",
-    "NOTICE"
+    "NOTICE",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20.12"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -22,7 +44,8 @@
     "test": "vitest run",
     "rpc": "tsx src/cli.ts",
     "smoke:mcp": "tsx scripts/mcp-smoke.ts",
-    "media": "pnpm build && tsx scripts/media/build.ts"
+    "media": "pnpm build && tsx scripts/media/build.ts",
+    "prepublishOnly": "pnpm typecheck && pnpm build && pnpm test"
   },
   "dependencies": {
     "@clack/prompts": "^1.8.1",
