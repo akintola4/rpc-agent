@@ -1,6 +1,7 @@
 import { isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
+import type { AuthOptions } from './auth.js';
 import { DEFAULT_DEVICES } from './devices.js';
 import { DEFAULT_MAX_HEIGHT } from './slices.js';
 
@@ -32,6 +33,8 @@ export interface ShotOptions {
   maxSlices: number;
   /** Slice JPEG width cap, px. */
   sliceWidth: number;
+  /** Cookies, headers, storage state and saved-session use. */
+  auth?: AuthOptions | undefined;
 }
 
 export const DEFAULT_MAX_SLICES = 10;
