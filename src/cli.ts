@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { relative } from 'node:path';
 import { ArgError, parseCli, USAGE, type LoginCommand } from './args.js';
-import { clearSessions, describeAuth, listSessions, sessionsDir, type SessionInfo } from './auth.js';
+import { clearSessions, describeAuth, listSessions, localTime, sessionsDir, type SessionInfo } from './auth.js';
 import { doctor, installChromium, type DoctorReport } from './browser.js';
 import { capture, type DeviceShot } from './capture.js';
 import { CATEGORY_LABELS, CATEGORY_ORDER, DEVICE_ALIASES, DEVICES } from './devices.js';
@@ -166,7 +166,7 @@ async function plainLogin(cmd: LoginCommand): Promise<number> {
 }
 
 function sessionLine(s: SessionInfo): string {
-  const when = (iso?: string) => (iso ? iso.slice(0, 16).replace('T', ' ') : '');
+  const when = localTime;
   const parts = [s.origin, `${s.cookies} cookie(s)`];
   if (s.savedAt) parts.push(`saved ${when(s.savedAt)}`);
   if (s.expired) parts.push(paint.bad(`expired ${when(s.expires)}`));

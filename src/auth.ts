@@ -392,6 +392,15 @@ export function resolveAuth(url: string, opts: AuthOptions, dir = sessionsDir())
   };
 }
 
+/** `2026-10-29 22:55` in the local time zone. */
+export function localTime(iso: string | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 /** Replace every secret value in text with •••. */
 export function redact(text: string, secrets: readonly string[]): string {
   let out = text;
@@ -403,7 +412,7 @@ export function redact(text: string, secrets: readonly string[]): string {
 export function describeAuth(s: AuthSummary): string {
   const parts: string[] = [];
   if (s.session) {
-    const when = s.session.savedAt ? `saved ${s.session.savedAt.slice(0, 16).replace('T', ' ')}` : '';
+    const when = s.session.savedAt ? `saved ${localTime(s.session.savedAt)}` : '';
     if (s.session.loaded) parts.push(`session ${s.session.origin}${when ? ` (${when})` : ''}`);
     else if (s.session.expired) parts.push(`session ${s.session.origin} expired, not loaded`);
     else parts.push(`session ${s.session.origin} skipped (--no-session)`);

@@ -10,6 +10,7 @@ import type { LoginCommand } from './args.js';
 import {
   clearSessions,
   listSessions,
+  localTime,
   MASK,
   resolveAuth,
   sessionsDir,
@@ -235,7 +236,7 @@ export function summaryLines(o: ShotOptions, c: Colors, auth?: AuthSummary): str
 export function authRows(a: AuthSummary, c: Colors): [string, string][] {
   const rows: [string, string][] = [];
   if (a.session) {
-    const saved = a.session.savedAt ? c.dim(` saved ${a.session.savedAt.slice(0, 16).replace('T', ' ')}`) : '';
+    const saved = a.session.savedAt ? c.dim(` saved ${localTime(a.session.savedAt)}`) : '';
     if (a.session.loaded) rows.push(['session', `${c.green(a.session.origin)}${saved}`]);
     else if (a.session.expired) rows.push(['session', c.yellow(`${a.session.origin} expired, not loaded`)]);
     else rows.push(['session', c.dim(`${a.session.origin} skipped (--no-session)`)]);
@@ -603,7 +604,7 @@ export async function runSessions(action: 'list' | 'clear', origin: string | und
     p.outro(c.dim('Create one with: rpc login <url>'));
     return 0;
   }
-  const when = (iso?: string) => (iso ? iso.slice(0, 16).replace('T', ' ') : '');
+  const when = localTime;
   const originW = Math.max(...list.map(s => s.origin.length));
   const lines = list.map(s => {
     const exp = s.expired ? c.red(`expired ${when(s.expires)}`) : s.expires ? c.dim(`expires ${when(s.expires)}`) : c.dim('no expiry');
