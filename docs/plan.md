@@ -184,8 +184,8 @@ Dependencies: `playwright`, `@modelcontextprotocol/sdk`, `zod`. Dev:
 
 Landscape orientation, browser chrome overlays (RPC's fake Safari/Chrome
 bars), breakpoint guides, Firefox/WebKit engines, auth/cookies/headers,
-interaction scripts before capture, visual diffing, HTTP/SSE MCP transport,
-publishing to npm.
+interaction scripts before capture, visual diffing, HTTP/SSE MCP transport.
+(Publishing to npm was out of scope for v1; it ships from 0.3.1.)
 
 ## Steps
 
@@ -255,11 +255,12 @@ count and labels through the MCP server over an in-memory transport.
 
 **5. Missing Chromium.** (Added during v0.2.) `launchBrowser()` turns
 Playwright's "Executable doesn't exist" into one message with the fix
-(`npx playwright install chromium` in the rpc folder, or `rpc install`). The
+(`npx rpc-agent install`, or `rpc install`). The
 MCP tool returns it as a tool error and the server keeps running. `rpc
 doctor` launches Chromium to check it; `rpc install` runs this package's own
 `playwright install chromium`. Tested by pointing `PLAYWRIGHT_BROWSERS_PATH`
-at an empty temp dir. Package stays `"private": true` (GitHub, not npm).
+at an empty temp dir. (From 0.3.1 the package is on npm and the message
+names `npx rpc-agent install`; Chromium is never downloaded by a postinstall.)
 
 ## v0.3 CLI UX
 

@@ -1,8 +1,8 @@
 # rpc-agent
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/media/hero-dark.png">
-  <img alt="A site captured by rpc on an iPhone 15, an iPad Air 11 and a 1440 px desktop, each framed in its device bezel" src="docs/media/hero-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/akintola4/rpc-agent/main/docs/media/hero-dark.png">
+  <img alt="A site captured by rpc on an iPhone 15, an iPad Air 11 and a 1440 px desktop, each framed in its device bezel" src="https://raw.githubusercontent.com/akintola4/rpc-agent/main/docs/media/hero-light.png">
 </picture>
 
 Screenshot a URL at real device viewports, optionally framed in a device
@@ -15,28 +15,47 @@ Chrome extension. See `NOTICE` for where the artwork comes from.
 
 ## Install
 
-Requires Node 20+ and pnpm. Not on npm yet: install from a clone.
+Requires Node 20.12 or newer. Run it without installing:
 
 ```sh
-git clone <repo-url> rpc-agent
-cd rpc-agent
-pnpm install
-pnpm build
-pnpm exec playwright install chromium   # or: node dist/cli.js install
-node dist/cli.js doctor                 # checks Chromium is installed and launches
+npx rpc-agent install          # first run: download headless Chromium (~210 MB on disk)
+npx rpc-agent shot localhost:3000 -d iphone-15,desktop-1440 --bezels
 ```
 
-Install Chromium from inside the repo (or with `rpc install`) so the browser
-matches the Playwright version rpc uses. If it's missing, every command says
-so and prints that fix instead of failing with Playwright's own error.
+Or install it globally to get the `rpc` command:
 
-Optionally put `rpc` on your PATH with `pnpm link --global`. Without it, run
-`node /absolute/path/to/rpc-agent/dist/cli.js` wherever these docs say `rpc`,
-or `pnpm rpc` from inside the repo.
+```sh
+npm i -g rpc-agent
+rpc install                    # first run: download Chromium
+rpc doctor                     # checks Chromium is installed and launches
+rpc shot https://example.com --bezels
+```
+
+Chromium is not downloaded when the package installs. `rpc install` (or
+`npx rpc-agent install`) fetches it with rpc's own Playwright version, so
+the browser always matches the one rpc launches. It installs only
+Chromium's headless shell (plus Playwright's small ffmpeg), not the full
+Chrome for Testing build, since rpc never opens a visible window. Until you run it, every
+command says Chromium is missing and prints that command, instead of
+failing with Playwright's own error. Browsers go to Playwright's usual
+cache, so other Playwright projects on the same version share them.
+
+### From source
+
+```sh
+git clone https://github.com/akintola4/rpc-agent.git
+cd rpc-agent
+pnpm install && pnpm build
+node dist/cli.js install
+pnpm link --global             # optional: puts this build's `rpc` on your PATH
+```
+
+Without the link, run `node /absolute/path/to/rpc-agent/dist/cli.js` where
+these docs say `rpc`, or `pnpm rpc` from inside the repo.
 
 ## CLI
 
-![rpc run with no arguments: the banner, prompts for the URL, devices and bezels, a spinner per device, a results table and the list of files written, then the three framed screenshots](docs/media/demo.gif)
+![rpc run with no arguments: the banner, prompts for the URL, devices and bezels, a spinner per device, a results table and the list of files written, then the three framed screenshots](https://raw.githubusercontent.com/akintola4/rpc-agent/main/docs/media/demo.gif)
 
 ```sh
 rpc                    # interactive: pick a URL, devices and options
@@ -58,7 +77,7 @@ equivalent `rpc shot` command at the end so you can re-run it.
 `rpc shot` in a terminal shows each device's progress, a results table and
 the files it wrote:
 
-<img alt="rpc shot in a terminal: a capture summary, one line per device with HTTP status and time, a results table, and the list of files written" src="docs/media/terminal-shot.png" width="720">
+<img alt="rpc shot in a terminal: a capture summary, one line per device with HTTP status and time, a results table, and the list of files written" src="https://raw.githubusercontent.com/akintola4/rpc-agent/main/docs/media/terminal-shot.png" width="720">
 
 | Option | Meaning |
 | --- | --- |
@@ -133,7 +152,7 @@ to the plain lines. `rpc mcp` never prints anything but MCP messages.
 Each device fails on its own, with an `error`, a `code` and usually a `hint`.
 In a terminal, devices that fail the same way share one hint:
 
-<img alt="rpc shot against a host that doesn't resolve: both devices fail with ERR_NAME_NOT_RESOLVED and one hint explains what to check" src="docs/media/terminal-error.png" width="720">
+<img alt="rpc shot against a host that doesn't resolve: both devices fail with ERR_NAME_NOT_RESOLVED and one hint explains what to check" src="https://raw.githubusercontent.com/akintola4/rpc-agent/main/docs/media/terminal-error.png" width="720">
 
 Plain output (pipes, agents, CI):
 
@@ -185,8 +204,8 @@ Then the images:
   typical marketing page is roughly 0.5 MB of JPEG.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/media/mcp-slices-dark.png">
-  <img alt="The first five labelled full-page slices returned for an iPhone 15 capture" src="docs/media/mcp-slices-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/akintola4/rpc-agent/main/docs/media/mcp-slices-dark.png">
+  <img alt="The first five labelled full-page slices returned for an iPhone 15 capture" src="https://raw.githubusercontent.com/akintola4/rpc-agent/main/docs/media/mcp-slices-light.png">
 </picture>
 
 When a page has more slices than `maxSlices`, the text says which ones were
@@ -204,15 +223,21 @@ directory. Claude Code and Cursor start the server in the project root.
 
 ### Claude Code
 
-From the repo folder, after `pnpm build`:
+```sh
+claude mcp add --scope user rpc -- npx -y rpc-agent mcp
+```
+
+Drop `--scope user` to add it to the current project only. Run
+`npx rpc-agent install` once first so the server has a browser. If
+`rpc-agent` is installed globally, `claude mcp add --scope user rpc -- rpc
+mcp` skips the npx lookup on each start.
+
+From a clone, point it at the build instead (the path must be absolute,
+and Claude Code needs a restart or `/mcp` reconnect after rebuilding):
 
 ```sh
 claude mcp add --scope user rpc -- node "$(pwd)/dist/cli.js" mcp
 ```
-
-The path must be absolute. Drop `--scope user` to add it to the current
-project only. After rebuilding, restart Claude Code (or reconnect with
-`/mcp`) to load the new build.
 
 If you use the Claude Code sandbox, pages on hosts outside its network
 allowlist fail with `ERR_NAME_NOT_RESOLVED` or a proxy error; the hint says
@@ -226,12 +251,15 @@ so. Add the domain to the allowlist.
 {
   "mcpServers": {
     "rpc": {
-      "command": "node",
-      "args": ["/absolute/path/to/rpc-agent/dist/cli.js", "mcp"]
+      "command": "npx",
+      "args": ["-y", "rpc-agent", "mcp"]
     }
   }
 }
 ```
+
+From a clone, use `"command": "node"` and
+`"args": ["/absolute/path/to/rpc-agent/dist/cli.js", "mcp"]`.
 
 ## Development
 

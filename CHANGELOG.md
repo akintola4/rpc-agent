@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.1
+
+Published to npm as `rpc-agent`.
+
+### Added
+
+- Install with `npx rpc-agent …` or `npm i -g rpc-agent`. MCP setup for
+  Claude Code is `claude mcp add --scope user rpc -- npx -y rpc-agent mcp`;
+  Cursor uses `"command": "npx", "args": ["-y", "rpc-agent", "mcp"]`.
+- Package metadata (repository, homepage, bugs, keywords, author) and a
+  `prepublishOnly` check that typechecks, builds and runs the tests.
+
+### Changed
+
+- The missing-Chromium message now says `npx rpc-agent install` (or
+  `rpc install`) and names the Playwright version, instead of pointing at
+  `npx playwright install chromium` inside the package folder, which under
+  npx is a cache directory and could pull a different Playwright.
+- `rpc install` run through npx no longer shows Playwright's "install your
+  project's dependencies" warning box, which didn't apply.
+- `rpc install` downloads only Chromium's headless shell (`--only-shell`),
+  which is all rpc launches: about 210 MB on disk instead of about 580 MB.
+- Requires Node 20.12 or newer (what `@clack/prompts` needs).
+- Chromium is still never downloaded on install: run `rpc install` once.
+
 ## 0.3.0
 
 A terminal UI modelled on the `skills` CLI (skills.sh). Nothing changes for
