@@ -2,7 +2,7 @@
 //
 //   pnpm media              # capture (cached in .media-cache), then render everything
 //   pnpm media --fresh      # re-capture the demo sites first
-//   pnpm media --only gif   # hero | gif | slices
+//   pnpm media --only gif   # hero | gif | slices | banner
 //
 // Needs ffmpeg and python3 on PATH. Captures hit the live demo sites, so they
 // need network. See docs/media.md for why it works this way.
@@ -18,6 +18,7 @@ import { pngSize } from '../../src/png.js';
 import { DEFAULT_MAX_SLICES } from '../../src/options.js';
 import { planSlices } from '../../src/slices.js';
 import { BOX_CHARS, TERM_BG, TERM_FG, playback, record, type Recording } from './terminal.js';
+import { BANNER, OG, block, circle, path, rect, renderBanner, ART_BG, ART_DIM, type BannerSpec, type Mark } from './banner.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CACHE = join(ROOT, '.media-cache');
@@ -410,17 +411,134 @@ async function slicesImage(browser: Browser) {
   }
 }
 
+// ---------------------------------------------------------------- banner
+
+/**
+ * The Responsive Point Check banner's laptop, tablet and phone, with a
+ * terminal in front running `rpc shot`: the CLI/MCP sibling of the extension.
+ * Coordinates are on a 4px grid (see banner.ts).
+ */
+function bannerArt(): BannerSpec['art'] {
+  const bg = ` fill="${ART_BG}"`;
+  return {
+    width: 672,
+    height: 400,
+    svg: [
+      // laptop
+      rect(48, 0, 480, 328, 16, false, bg),
+      rect(64, 16, 448, 296, 4),
+      block(64, 16, 448, 12, 2),
+      block(260, 16, 56, 16, 6, ART_BG),
+      block(88, 48, 56, 12, 3),
+      block(352, 51, 32, 6, 3), block(392, 51, 32, 6, 3), block(432, 51, 32, 6, 3),
+      rect(88, 80, 400, 96, 4),
+      block(88, 196, 120, 48, 4), block(224, 196, 120, 48, 4),
+      block(88, 256, 120, 6, 3), block(224, 256, 88, 6, 3),
+      block(88, 272, 120, 40, 4), block(224, 272, 120, 40, 4),
+      rect(0, 328, 576, 16, 8),
+      path('M256 328V332H320V328'),
+      // tablet
+      rect(384, 72, 208, 288, 20, false, bg),
+      rect(396, 84, 184, 264, 10),
+      block(412, 100, 40, 10, 3), block(548, 103, 16, 4, 2),
+      rect(412, 124, 152, 56, 4),
+      block(412, 196, 72, 40, 4), block(492, 196, 72, 40, 4),
+      block(412, 244, 72, 6, 3), block(492, 244, 48, 6, 3),
+      block(412, 264, 72, 40, 4), block(492, 264, 72, 40, 4),
+      block(412, 312, 72, 6, 3), block(492, 312, 56, 6, 3),
+      // phone
+      rect(560, 184, 112, 216, 20, false, bg),
+      rect(568, 192, 96, 200, 14),
+      block(596, 200, 40, 8, 4),
+      block(576, 220, 28, 8, 3),
+      rect(576, 236, 80, 40, 4),
+      block(576, 288, 80, 24, 4), block(576, 320, 80, 4, 2), block(576, 328, 48, 4, 2),
+      block(576, 344, 80, 24, 4), block(576, 376, 56, 4, 2),
+      // terminal, in front of the laptop's screen, above its base
+      rect(0, 176, 320, 136, 12, false, bg),
+      path('M0 208H320'),
+      circle(20, 192, 5), circle(38, 192, 5), circle(56, 192, 5),
+      `<text x="24" y="254" font-family="Plex" font-weight="500" font-size="20" stroke="none" fill="${ART_DIM}">$</text>`,
+      `<text x="48" y="254" font-family="Plex" font-weight="500" font-size="20" stroke="none" fill="#ffffff">rpc shot</text>`,
+      block(152, 236, 12, 22, 1),
+      block(24, 276, 208, 6, 3, ART_DIM),
+      block(24, 292, 152, 6, 3, ART_DIM),
+    ].join(''),
+  };
+}
+
+/**
+ * The agents rpc works with, in a column left of the terminal with lines
+ * into its prompt. Claude Code and Cursor are their companies' official SVGs
+ * (sources in docs/media.md), unchanged: banner.ts draws them as monochrome
+ * masks. Codex has no official mark here, so the art draws a neutral `>_`
+ * prompt in the banner's own line style. Heights differ so the three read at
+ * the same optical size.
+ */
+const COLUMN_X = -76;
+const COLUMN_YS = [196, 248, 300];
+
+function marks(): Mark[] {
+  const logo = (f: string) => readFileSync(join(ROOT, 'scripts', 'media', 'logos', f), 'utf8');
+  return [
+    { svg: logo('claude-spark.svg'), label: 'Claude Code', height: 34 },
+    { label: 'Codex', height: 32 },
+    { svg: logo('cursor-cube.svg'), label: 'Cursor', height: 32 },
+  ];
+}
+
+/** The Codex stand-in (centred on the column's middle mark) and the lines from the marks into the prompt. */
+function columnArt(): string {
+  const cx = COLUMN_X, cy = COLUMN_YS[1]!;
+  const prompt = [
+    rect(cx - 16, cy - 16, 32, 32, 8),
+    path(`M${cx - 8} ${cy - 6}L${cx - 2} ${cy}L${cx - 8} ${cy + 6}`),
+    path(`M${cx + 2} ${cy + 6}H${cx + 8}`),
+  ];
+  const from = cx + 28;
+  const lines = COLUMN_YS.map((y) =>
+    path(y === cy ? `M${from} ${cy}H0` : `M${from} ${y}C${from + 16} ${y} ${-16} ${cy} 0 ${cy}`, ` stroke="${ART_DIM}"`),
+  );
+  return lines.join('') + prompt.join('');
+}
+
+const BANNER_SPEC = (): BannerSpec => {
+  const art = bannerArt();
+  return {
+    tagline: 'CLI + MCP server · device screenshots for AI agents · Claude Code, Codex, Cursor.',
+    // One size down from motion-inspector's, so this longer line clears the laptop.
+    taglineSize: 15,
+    lines: ['rpc-', 'agent'],
+    art: { ...art, svg: columnArt() + art.svg },
+    marks: { items: marks(), x: COLUMN_X, ys: COLUMN_YS },
+  };
+};
+
+async function banner(browser: Browser) {
+  for (const [name, out] of [['banner', BANNER], ['og', OG]] as const) {
+    const raw = join(STAGE, `${name}-raw.png`);
+    await renderBanner(browser, BANNER_SPEC(), out, ROOT, raw);
+    const file = join(OUT, `${name}.png`);
+    // Everything is grey (the background is #0c0c0d), so an 8-bit greyscale
+    // PNG keeps every anti-aliased edge and is a fraction of the RGBA size.
+    ffmpeg(['-i', raw, '-pix_fmt', 'gray', '-compression_level', '9', file]);
+    console.log(`${file}  ${kb(file)}  ${1600 * out.scale * out.dpr}x${Math.round(out.height * out.scale) * out.dpr}`);
+  }
+}
+
 // ---------------------------------------------------------------- main
 
 mkdirSync(STAGE, { recursive: true });
 mkdirSync(OUT, { recursive: true });
-const rec = await recordInteractive();
-capture('fullPage');
+// The banner is drawn, so it needs no recording or capture.
+const rec = only === 'banner' ? null : await recordInteractive();
+if (only !== 'banner') capture('fullPage');
 const browser = await launchBrowser();
 try {
   if (!only || only === 'hero') await hero(browser);
-  if (!only || only === 'gif') await gif(browser, rec);
+  if (!only || only === 'gif') await gif(browser, rec!);
   if (!only || only === 'slices') await slicesImage(browser);
+  if (!only || only === 'banner') await banner(browser);
 } finally {
   await browser.close();
 }

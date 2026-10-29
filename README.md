@@ -1,5 +1,7 @@
 # rpc-agent
 
+<img src="https://raw.githubusercontent.com/akintola4/rpc-agent/main/docs/media/banner.png" width="100%" alt="rpc-agent: CLI + MCP server · device screenshots for AI agents · Claude Code, Codex, Cursor. A line drawing of a laptop, tablet and phone with a terminal in front running rpc shot; the Claude Code and Cursor marks and a terminal-prompt glyph for Codex sit beside it, with lines into the prompt.">
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/akintola4/rpc-agent/main/docs/media/hero-dark.png">
   <img alt="A site captured by rpc on an iPhone 15, an iPad Air 11 and a 1440 px desktop, each framed in its device bezel" src="https://raw.githubusercontent.com/akintola4/rpc-agent/main/docs/media/hero-light.png">
@@ -219,7 +221,8 @@ Takes an optional `category` (`apple-phone`, `android-phone`, `tablet`,
 `laptop`) and returns ids, sizes and aliases.
 
 Files go to `outDir`, which is resolved against the server's working
-directory. Claude Code and Cursor start the server in the project root.
+directory. Claude Code and Cursor start the server in the project root; in
+Codex, set `cwd` on the server to choose the directory.
 
 ### Claude Code
 
@@ -260,6 +263,25 @@ so. Add the domain to the allowlist.
 
 From a clone, use `"command": "node"` and
 `"args": ["/absolute/path/to/rpc-agent/dist/cli.js", "mcp"]`.
+
+### Codex
+
+```sh
+codex mcp add rpc -- npx -y rpc-agent mcp
+```
+
+Or add it to `~/.codex/config.toml` (or `.codex/config.toml` in a trusted
+project). The Codex CLI and IDE extension read the same file:
+
+```toml
+[mcp_servers.rpc]
+command = "npx"
+args = ["-y", "rpc-agent", "mcp"]
+```
+
+From a clone, use `command = "node"` and
+`args = ["/absolute/path/to/rpc-agent/dist/cli.js", "mcp"]`. `/mcp` in the
+Codex TUI lists the servers it started.
 
 ## Development
 
