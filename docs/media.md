@@ -17,9 +17,8 @@ frames go to `.media-cache/` (gitignored); only the final files are committed.
 
 | File | What |
 | --- | --- |
-| `banner.png` | 3200x1600 (1600x800 at 2x), the README's first image. The Responsive Point Check banner's family: near-black background, IBM Plex Mono tagline and wordmark with the hyphen as a grey bar, white line-art of RPC's laptop, tablet and phone with a terminal in front running `rpc shot`, and the Claude Code, Codex and Cursor marks in a row under the wordmark. |
+| `banner.png` | 3200x1600 (1600x800 at 2x), the README's first image. The Responsive Point Check banner's family: near-black background, IBM Plex Mono tagline and wordmark with the hyphen as a grey bar, white line-art of RPC's laptop, tablet and phone with a terminal in front running `rpc shot`, and a column of Claude Code, Codex and Cursor marks left of the terminal with lines into its prompt. |
 | `og.png` | 1200x630, the same banner at 0.75 scale for social cards. |
-| `banner-b.png`, `og-b.png` | The alternative layout: the marks in a column left of the terminal, with lines into the prompt. `BANNER_PICK` in build.ts chooses which one is `banner.png`. |
 | `hero-light.png`, `hero-dark.png` | iPhone 15, iPad Air 11" and Desktop 1440 framed shots side by side, transparent background, 1920 px wide (2x). The README picks one with `<picture>` and `prefers-color-scheme`. |
 | `demo.gif` | 16.6 s loop, 1056x660, 20 fps: `rpc` run with no arguments in a terminal (banner, prompts, spinners, Results table, `Captured 3 devices`, `Done!`), then the three framed shots it wrote. |
 | `terminal-shot.png`, `terminal-error.png` | `rpc shot` in an interactive terminal (0.3), for a working site and for a host that doesn't resolve. Not built by `pnpm media`; see below. |
@@ -103,12 +102,15 @@ design canvas:
   small inset, and is centred on the x-height.
 - IBM Plex Mono comes from `@fontsource/ibm-plex-mono` and is embedded in the
   page.
-- The agent marks are the companies' own SVG files, kept unchanged in
-  `scripts/media/logos/`. banner.ts crops each file's viewBox to its drawn
-  shape (so different padding doesn't change the size) and uses the file as
-  a mask over white, which makes it monochrome without redrawing it. Heights
-  are set per mark (`marks()` in build.ts) for an even optical size. Labels
-  are Plex Mono in the tagline grey, centred on the mark by their x-height.
+- The Claude Code and Cursor marks are the companies' own SVG files, kept
+  unchanged in `scripts/media/logos/`. banner.ts crops each file's viewBox
+  to its drawn shape (so different padding doesn't change the size) and uses
+  the file as a mask over white, which makes it monochrome without redrawing
+  it. Codex is shown with a neutral `>_` prompt drawn in the banner's own
+  2px line style (`columnArt()` in build.ts), not OpenAI's logo. Heights are
+  set per mark (`marks()`) for an even optical size. Labels are Plex Mono in
+  the tagline grey, centred on the mark by their x-height, and the middle
+  line lands on the prompt's x-height centre.
 - Output is 8-bit greyscale PNG: there's no colour, and it keeps every
   anti-aliased edge at a fraction of the RGBA size.
 
@@ -117,10 +119,10 @@ design canvas:
 | File | Source | Notes |
 | --- | --- | --- |
 | `logos/claude-spark.svg` | Anthropic press kit, linked from <https://www.anthropic.com/press-kit> (the zip at `www-cdn.anthropic.com/ae59ca4ca194dac9c9dc3bc78c5829468cb0e8af.zip`): `Anthropic logos/Claude logos/3 Claude Spark/SVG/Claude Spark - Clay.svg` | The Claude mark. The kit has no written usage terms; it's offered as media resources. |
-| `logos/openai-blossom.svg` | OpenAI's `openai/sign-in-with-chatgpt-devkit` repo, `assets/brand/chatgpt-dialog-72.svg` (commit `0a36fef`): <https://github.com/openai/sign-in-with-chatgpt-devkit/blob/0a36fefeb913055c8c7a1a29b63d82b96b2e841a/assets/brand/chatgpt-dialog-72.svg> | The OpenAI Blossom. The repo says its brand assets follow the [OpenAI brand guidelines](https://openai.com/brand/) and that its licence grants no trademark rights or permission to imply endorsement. The guidelines send logo permission requests to partnercomms@openai.com. |
 | `logos/cursor-cube.svg` | Cursor brand page <https://cursor.com/brand>, zip `cursor-brand-assets.zip`: `General Logos/Cube/SVG/CUBE_2D_DARK.svg` | The Cursor cube. The page asks only that the product be called "Cursor". |
 
-The marks say which agents rpc works with. They're trademarks of their
+The Codex `>_` is a generic prompt glyph, not OpenAI's mark. The marks say
+which agents rpc works with. They're trademarks of their
 owners, and nothing here implies endorsement.
 
 ## Changing it

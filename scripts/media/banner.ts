@@ -17,13 +17,14 @@ const DIM = '#737373';
 const TAG = '#8a8a8a';
 
 /**
- * A third-party mark, drawn from its official SVG file unchanged: the file is
- * used as a mask over a flat colour (so it's monochrome), and its viewBox is
- * cropped to the drawn shape so marks with different padding line up.
+ * A mark with a label. With `svg` (an official logo file, unchanged) the
+ * file is used as a mask over a flat colour, so it's monochrome, with its
+ * viewBox cropped to the drawn shape so marks with different padding line up.
+ * Without it, only the label is placed and the art draws the mark itself.
  */
 export interface Mark {
   /** The SVG file's text. */
-  svg: string;
+  svg?: string;
   label: string;
   /** Drawn height in design px; set per mark for an even optical size. */
   height: number;
@@ -31,15 +32,13 @@ export interface Mark {
 
 export interface BannerSpec {
   tagline: string;
+  /** Tagline size in design px (default 16). */
+  taglineSize?: number;
   /** Wordmark lines; a trailing "-" on a line is drawn as a grey bar. */
   lines: [string, string];
   art: { width: number; height: number; svg: string };
-  /**
-   * Marks in a row under the wordmark, on its left edge ("row"), or in a
-   * column in art coordinates, labels to their left ("art": x is the column's
-   * centre, ys the marks' centres).
-   */
-  marks?: { items: Mark[]; place: 'row' } | { items: Mark[]; place: 'art'; x: number; ys: number[] };
+  /** Marks in a column in art coordinates, labels to their left: x is the column's centre, ys the marks' centres. */
+  marks?: { items: Mark[]; x: number; ys: number[] };
 }
 
 export interface BannerOut {
@@ -53,8 +52,8 @@ export const BANNER: BannerOut = { height: 800, scale: 1, dpr: 2 };
 export const OG: BannerOut = { height: 840, scale: 0.75, dpr: 1 };
 
 const W = 1600, MARGIN = 72, FONT = 112, TAG_SIZE = 16, TAG_GAP = 40, LEADING = 116;
-/** Marks: label size, space between a mark and its label, between items, and from line 2's baseline to the row. */
-const LABEL = 14, LABEL_GAP = 12, ITEM_GAP = 40, ROW_GAP = 64;
+/** Marks: label size, and the space between a label and its mark. */
+const LABEL = 14, LABEL_GAP = 10;
 
 function fontFace(root: string): string {
   const dir = join(root, 'node_modules', '@fontsource', 'ibm-plex-mono', 'files');
@@ -82,7 +81,7 @@ function html(spec: BannerSpec, out: BannerOut, root: string): string {
   html,body{margin:0;width:${W * s}px;height:${H * s}px;overflow:hidden;background:${BG}}
   .w,.tag{position:absolute;left:${MARGIN * s}px;white-space:pre;font-family:"Plex";-webkit-font-smoothing:antialiased;font-kerning:none}
   .w{font-size:${FONT * s}px;font-weight:500;line-height:1;color:${FG};letter-spacing:-0.01em}
-  .tag{font-size:${TAG_SIZE * s}px;font-weight:400;line-height:1;color:${TAG};letter-spacing:0}
+  .tag{font-size:${(spec.taglineSize ?? TAG_SIZE) * s}px;font-weight:400;line-height:1;color:${TAG};letter-spacing:0}
   .bar{position:absolute;background:${DIM}}
   .mark{position:absolute;background:${FG};-webkit-mask-repeat:no-repeat;-webkit-mask-size:100% 100%}
   .lab{position:absolute;font-family:"Plex";font-size:${LABEL * s}px;font-weight:400;line-height:1;color:${TAG};white-space:pre;-webkit-font-smoothing:antialiased}
@@ -109,9 +108,7 @@ function html(spec: BannerSpec, out: BannerOut, root: string): string {
     const xh = ctx.measureText('x').actualBoundingBoxAscent;
     const lead = ${LEADING} * s;
     const MARKS = ${JSON.stringify(spec.marks ?? null)};
-    const rowH = MARKS && MARKS.place === 'row' ? Math.max(...MARKS.items.map((m) => m.height)) * s : 0;
-    // With a row of marks, the block runs to the row's bottom.
-    const blockH = cap + lead + (rowH ? ${ROW_GAP} * s + rowH : 0);
+    const blockH = cap + lead;
     const base0 = Math.round(H / 2 - blockH / 2 + cap);
     const lines = [document.getElementById('l0'), document.getElementById('l1')];
     // Distance from an element's top to its baseline, read off a zero-size inline-block.
@@ -143,6 +140,12 @@ function html(spec: BannerSpec, out: BannerOut, root: string): string {
       host.style.cssText = 'position:absolute;left:-9999px;top:0';
       document.body.append(host);
       const sized = MARKS.items.map((m, i) => {
+        const el = document.getElementById('m' + i);
+        if (!m.svg) {
+          el.style.display = 'none';
+          const h = Math.round(m.height * s);
+          return { el, w: h, h, lab: document.getElementById('t' + i) };
+        }
         const doc = new DOMParser().parseFromString(m.svg, 'image/svg+xml').documentElement;
         host.append(doc);
         const b = doc.getBBox();
@@ -152,7 +155,6 @@ function html(spec: BannerSpec, out: BannerOut, root: string): string {
         doc.setAttribute('height', String(b.height));
         const url = 'url("data:image/svg+xml,' + encodeURIComponent(new XMLSerializer().serializeToString(doc)) + '")';
         const h = Math.round(m.height * s), w = Math.round((h * b.width) / b.height);
-        const el = document.getElementById('m' + i);
         el.style.webkitMaskImage = url;
         el.style.width = w + 'px';
         el.style.height = h + 'px';
@@ -170,20 +172,12 @@ function html(spec: BannerSpec, out: BannerOut, root: string): string {
         lab.style.top = Math.round(cy + lxh / 2 - baseline(lab)) + 'px';
         lab.style.left = Math.round(labelLeft) + 'px';
       };
-      if (MARKS.place === 'row') {
-        const cy = base0 + Math.round(lead) + ${ROW_GAP} * s + rowH / 2;
-        let x = ${MARGIN} * s;
-        for (const k of sized) {
-          place(k, x, cy, x + k.w + ${LABEL_GAP} * s);
-          x += k.w + ${LABEL_GAP} * s + k.lab.getBoundingClientRect().width + ${ITEM_GAP} * s;
-        }
-      } else {
-        const ax = ${(W - MARGIN - spec.art.width) * s}, ay = ${(H / 2 - spec.art.height / 2) * s};
-        sized.forEach((k, i) => {
-          const cx = ax + MARKS.x * s, cy = ay + MARKS.ys[i] * s;
-          place(k, cx - k.w / 2, cy, cx - Math.max(...sized.map((q) => q.w)) / 2 - ${LABEL_GAP} * s - k.lab.getBoundingClientRect().width);
-        });
-      }
+      const ax = ${(W - MARGIN - spec.art.width) * s}, ay = ${(H / 2 - spec.art.height / 2) * s};
+      const colW = Math.max(...sized.map((q) => q.w));
+      sized.forEach((k, i) => {
+        const cx = ax + MARKS.x * s, cy = ay + MARKS.ys[i] * s;
+        place(k, cx - k.w / 2, cy, cx - colW / 2 - ${LABEL_GAP} * s - k.lab.getBoundingClientRect().width);
+      });
     }
     const tag = document.getElementById('tag');
     tag.style.top = Math.round(base0 - cap - ${TAG_GAP} * s - baseline(tag)) + 'px';

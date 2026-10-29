@@ -468,52 +468,61 @@ function bannerArt(): BannerSpec['art'] {
 }
 
 /**
- * The agents rpc works with, from each company's official SVG (sources in
- * docs/media.md), unchanged: banner.ts draws them as monochrome masks.
- * Heights differ so the three read at the same optical size.
+ * The agents rpc works with, in a column left of the terminal with lines
+ * into its prompt. Claude Code and Cursor are their companies' official SVGs
+ * (sources in docs/media.md), unchanged: banner.ts draws them as monochrome
+ * masks. Codex has no official mark here, so the art draws a neutral `>_`
+ * prompt in the banner's own line style. Heights differ so the three read at
+ * the same optical size.
  */
+const COLUMN_X = -76;
+const COLUMN_YS = [196, 248, 300];
+
 function marks(): Mark[] {
   const logo = (f: string) => readFileSync(join(ROOT, 'scripts', 'media', 'logos', f), 'utf8');
   return [
     { svg: logo('claude-spark.svg'), label: 'Claude Code', height: 34 },
-    { svg: logo('openai-blossom.svg'), label: 'Codex', height: 32 },
-    { svg: logo('cursor-cube.svg'), label: 'Cursor', height: 34 },
+    { label: 'Codex', height: 32 },
+    { svg: logo('cursor-cube.svg'), label: 'Cursor', height: 32 },
   ];
 }
 
-const TAGLINE = 'CLI + MCP server · device screenshots for AI agents · Claude Code, Codex, Cursor.';
+/** The Codex stand-in (centred on the column's middle mark) and the lines from the marks into the prompt. */
+function columnArt(): string {
+  const cx = COLUMN_X, cy = COLUMN_YS[1]!;
+  const prompt = [
+    rect(cx - 16, cy - 16, 32, 32, 8),
+    path(`M${cx - 8} ${cy - 6}L${cx - 2} ${cy}L${cx - 8} ${cy + 6}`),
+    path(`M${cx + 2} ${cy + 6}H${cx + 8}`),
+  ];
+  const from = cx + 28;
+  const lines = COLUMN_YS.map((y) =>
+    path(y === cy ? `M${from} ${cy}H0` : `M${from} ${y}C${from + 16} ${y} ${-16} ${cy} 0 ${cy}`, ` stroke="${ART_DIM}"`),
+  );
+  return lines.join('') + prompt.join('');
+}
 
-/** a: the marks in a row under the wordmark. b: in a column left of the terminal, lines into the prompt. */
-const BANNER_SPECS = (): Record<'a' | 'b', BannerSpec> => {
+const BANNER_SPEC = (): BannerSpec => {
   const art = bannerArt();
-  const ys = [196, 244, 292];
-  const lines = ys.map((y) => (y === 244 ? 'M-36 244H0' : `M-36 ${y}C-16 ${y} -16 244 0 244`));
   return {
-    a: { tagline: TAGLINE, lines: ['rpc-', 'agent'], art, marks: { items: marks(), place: 'row' } },
-    b: {
-      tagline: TAGLINE,
-      lines: ['rpc-', 'agent'],
-      art: { ...art, svg: lines.map((d) => path(d, ` stroke="${ART_DIM}"`)).join('') + art.svg },
-      marks: { items: marks(), place: 'art', x: -64, ys },
-    },
+    tagline: 'CLI + MCP server · device screenshots for AI agents · Claude Code, Codex, Cursor.',
+    // One size down from motion-inspector's, so this longer line clears the laptop.
+    taglineSize: 15,
+    lines: ['rpc-', 'agent'],
+    art: { ...art, svg: columnArt() + art.svg },
+    marks: { items: marks(), x: COLUMN_X, ys: COLUMN_YS },
   };
 };
 
-/** The README uses this one; the other is rendered as banner-<v>.png to compare. */
-const BANNER_PICK = 'a' as const;
-
 async function banner(browser: Browser) {
-  const specs = BANNER_SPECS();
-  for (const v of ['a', 'b'] as const) {
-    for (const [name, out] of [['banner', BANNER], ['og', OG]] as const) {
-      const raw = join(STAGE, `${name}-${v}-raw.png`);
-      await renderBanner(browser, specs[v], out, ROOT, raw);
-      const file = join(OUT, v === BANNER_PICK ? `${name}.png` : `${name}-${v}.png`);
-      // Everything is grey (the background is #0c0c0d), so an 8-bit greyscale
-      // PNG keeps every anti-aliased edge and is a fraction of the RGBA size.
-      ffmpeg(['-i', raw, '-pix_fmt', 'gray', '-compression_level', '9', file]);
-      console.log(`${file}  ${kb(file)}  ${1600 * out.scale * out.dpr}x${Math.round(out.height * out.scale) * out.dpr}`);
-    }
+  for (const [name, out] of [['banner', BANNER], ['og', OG]] as const) {
+    const raw = join(STAGE, `${name}-raw.png`);
+    await renderBanner(browser, BANNER_SPEC(), out, ROOT, raw);
+    const file = join(OUT, `${name}.png`);
+    // Everything is grey (the background is #0c0c0d), so an 8-bit greyscale
+    // PNG keeps every anti-aliased edge and is a fraction of the RGBA size.
+    ffmpeg(['-i', raw, '-pix_fmt', 'gray', '-compression_level', '9', file]);
+    console.log(`${file}  ${kb(file)}  ${1600 * out.scale * out.dpr}x${Math.round(out.height * out.scale) * out.dpr}`);
   }
 }
 
