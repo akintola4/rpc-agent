@@ -25,7 +25,7 @@
   "author": "akintola4",
   "type": "module",
   "bin": {
-    "rpc": "./dist/cli.js"
+    "rpc": "dist/cli.js"
   },
   "files": [
     "dist",
