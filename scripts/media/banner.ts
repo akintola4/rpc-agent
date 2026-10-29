@@ -16,11 +16,30 @@ const FG = '#ffffff';
 const DIM = '#737373';
 const TAG = '#8a8a8a';
 
+/**
+ * A third-party mark, drawn from its official SVG file unchanged: the file is
+ * used as a mask over a flat colour (so it's monochrome), and its viewBox is
+ * cropped to the drawn shape so marks with different padding line up.
+ */
+export interface Mark {
+  /** The SVG file's text. */
+  svg: string;
+  label: string;
+  /** Drawn height in design px; set per mark for an even optical size. */
+  height: number;
+}
+
 export interface BannerSpec {
   tagline: string;
   /** Wordmark lines; a trailing "-" on a line is drawn as a grey bar. */
   lines: [string, string];
   art: { width: number; height: number; svg: string };
+  /**
+   * Marks in a row under the wordmark, on its left edge ("row"), or in a
+   * column in art coordinates, labels to their left ("art": x is the column's
+   * centre, ys the marks' centres).
+   */
+  marks?: { items: Mark[]; place: 'row' } | { items: Mark[]; place: 'art'; x: number; ys: number[] };
 }
 
 export interface BannerOut {
@@ -34,6 +53,8 @@ export const BANNER: BannerOut = { height: 800, scale: 1, dpr: 2 };
 export const OG: BannerOut = { height: 840, scale: 0.75, dpr: 1 };
 
 const W = 1600, MARGIN = 72, FONT = 112, TAG_SIZE = 16, TAG_GAP = 40, LEADING = 116;
+/** Marks: label size, space between a mark and its label, between items, and from line 2's baseline to the row. */
+const LABEL = 14, LABEL_GAP = 12, ITEM_GAP = 40, ROW_GAP = 64;
 
 function fontFace(root: string): string {
   const dir = join(root, 'node_modules', '@fontsource', 'ibm-plex-mono', 'files');
@@ -63,10 +84,13 @@ function html(spec: BannerSpec, out: BannerOut, root: string): string {
   .w{font-size:${FONT * s}px;font-weight:500;line-height:1;color:${FG};letter-spacing:-0.01em}
   .tag{font-size:${TAG_SIZE * s}px;font-weight:400;line-height:1;color:${TAG};letter-spacing:0}
   .bar{position:absolute;background:${DIM}}
+  .mark{position:absolute;background:${FG};-webkit-mask-repeat:no-repeat;-webkit-mask-size:100% 100%}
+  .lab{position:absolute;font-family:"Plex";font-size:${LABEL * s}px;font-weight:400;line-height:1;color:${TAG};white-space:pre;-webkit-font-smoothing:antialiased}
   svg{position:absolute;left:${artX * s}px;top:${artY * s}px;overflow:visible}
   </style></head><body>
   <div class="tag" id="tag">${esc(spec.tagline)}</div>
   ${line(spec.lines[0], 0)}${line(spec.lines[1], 1)}
+  ${(spec.marks?.items ?? []).map((m, i) => `<i class="mark" id="m${i}"></i><span class="lab" id="t${i}">${esc(m.label)}</span>`).join('')}
   <svg width="${spec.art.width * s}" height="${spec.art.height * s}" viewBox="0 0 ${spec.art.width} ${spec.art.height}"
     fill="none" stroke="${FG}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <style>*{vector-effect:non-scaling-stroke}</style>
@@ -84,7 +108,10 @@ function html(spec: BannerSpec, out: BannerOut, root: string): string {
     const cap = ctx.measureText('H').actualBoundingBoxAscent;
     const xh = ctx.measureText('x').actualBoundingBoxAscent;
     const lead = ${LEADING} * s;
-    const blockH = cap + lead;
+    const MARKS = ${JSON.stringify(spec.marks ?? null)};
+    const rowH = MARKS && MARKS.place === 'row' ? Math.max(...MARKS.items.map((m) => m.height)) * s : 0;
+    // With a row of marks, the block runs to the row's bottom.
+    const blockH = cap + lead + (rowH ? ${ROW_GAP} * s + rowH : 0);
     const base0 = Math.round(H / 2 - blockH / 2 + cap);
     const lines = [document.getElementById('l0'), document.getElementById('l1')];
     // Distance from an element's top to its baseline, read off a zero-size inline-block.
@@ -109,6 +136,54 @@ function html(spec: BannerSpec, out: BannerOut, root: string): string {
       bar.style.height = h + 'px';
       // Centred on the x-height: baseline - xh/2.
       bar.style.top = Math.round(asc - xh / 2 - h / 2) + 'px';
+    }
+    if (MARKS) {
+      // Crop each file's viewBox to its drawn shape, then use it as a mask.
+      const host = document.createElement('div');
+      host.style.cssText = 'position:absolute;left:-9999px;top:0';
+      document.body.append(host);
+      const sized = MARKS.items.map((m, i) => {
+        const doc = new DOMParser().parseFromString(m.svg, 'image/svg+xml').documentElement;
+        host.append(doc);
+        const b = doc.getBBox();
+        doc.remove();
+        doc.setAttribute('viewBox', b.x + ' ' + b.y + ' ' + b.width + ' ' + b.height);
+        doc.setAttribute('width', String(b.width));
+        doc.setAttribute('height', String(b.height));
+        const url = 'url("data:image/svg+xml,' + encodeURIComponent(new XMLSerializer().serializeToString(doc)) + '")';
+        const h = Math.round(m.height * s), w = Math.round((h * b.width) / b.height);
+        const el = document.getElementById('m' + i);
+        el.style.webkitMaskImage = url;
+        el.style.width = w + 'px';
+        el.style.height = h + 'px';
+        return { el, w, h, lab: document.getElementById('t' + i) };
+      });
+      host.remove();
+      // Labels: centred on the mark's vertical centre by their x-height, like the hyphen bars.
+      const lctx = document.createElement('canvas').getContext('2d');
+      lctx.font = '400 ' + ${LABEL} * s + 'px Plex';
+      const lxh = lctx.measureText('x').actualBoundingBoxAscent;
+      const place = (k, left, cy, labelLeft) => {
+        const { el, w, h, lab } = k;
+        el.style.left = Math.round(left) + 'px';
+        el.style.top = Math.round(cy - h / 2) + 'px';
+        lab.style.top = Math.round(cy + lxh / 2 - baseline(lab)) + 'px';
+        lab.style.left = Math.round(labelLeft) + 'px';
+      };
+      if (MARKS.place === 'row') {
+        const cy = base0 + Math.round(lead) + ${ROW_GAP} * s + rowH / 2;
+        let x = ${MARGIN} * s;
+        for (const k of sized) {
+          place(k, x, cy, x + k.w + ${LABEL_GAP} * s);
+          x += k.w + ${LABEL_GAP} * s + k.lab.getBoundingClientRect().width + ${ITEM_GAP} * s;
+        }
+      } else {
+        const ax = ${(W - MARGIN - spec.art.width) * s}, ay = ${(H / 2 - spec.art.height / 2) * s};
+        sized.forEach((k, i) => {
+          const cx = ax + MARKS.x * s, cy = ay + MARKS.ys[i] * s;
+          place(k, cx - k.w / 2, cy, cx - Math.max(...sized.map((q) => q.w)) / 2 - ${LABEL_GAP} * s - k.lab.getBoundingClientRect().width);
+        });
+      }
     }
     const tag = document.getElementById('tag');
     tag.style.top = Math.round(base0 - cap - ${TAG_GAP} * s - baseline(tag)) + 'px';

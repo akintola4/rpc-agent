@@ -18,7 +18,7 @@ import { pngSize } from '../../src/png.js';
 import { DEFAULT_MAX_SLICES } from '../../src/options.js';
 import { planSlices } from '../../src/slices.js';
 import { BOX_CHARS, TERM_BG, TERM_FG, playback, record, type Recording } from './terminal.js';
-import { BANNER, OG, block, circle, path, rect, renderBanner, ART_BG, ART_DIM, type BannerSpec } from './banner.js';
+import { BANNER, OG, block, circle, path, rect, renderBanner, ART_BG, ART_DIM, type BannerSpec, type Mark } from './banner.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CACHE = join(ROOT, '.media-cache');
@@ -467,21 +467,53 @@ function bannerArt(): BannerSpec['art'] {
   };
 }
 
-const BANNER_SPEC = (): BannerSpec => ({
-  tagline: 'CLI + MCP server · device screenshots for AI agents · Claude Code, Cursor.',
-  lines: ['rpc-', 'agent'],
-  art: bannerArt(),
-});
+/**
+ * The agents rpc works with, from each company's official SVG (sources in
+ * docs/media.md), unchanged: banner.ts draws them as monochrome masks.
+ * Heights differ so the three read at the same optical size.
+ */
+function marks(): Mark[] {
+  const logo = (f: string) => readFileSync(join(ROOT, 'scripts', 'media', 'logos', f), 'utf8');
+  return [
+    { svg: logo('claude-spark.svg'), label: 'Claude Code', height: 34 },
+    { svg: logo('openai-blossom.svg'), label: 'Codex', height: 32 },
+    { svg: logo('cursor-cube.svg'), label: 'Cursor', height: 34 },
+  ];
+}
+
+const TAGLINE = 'CLI + MCP server · device screenshots for AI agents · Claude Code, Codex, Cursor.';
+
+/** a: the marks in a row under the wordmark. b: in a column left of the terminal, lines into the prompt. */
+const BANNER_SPECS = (): Record<'a' | 'b', BannerSpec> => {
+  const art = bannerArt();
+  const ys = [196, 244, 292];
+  const lines = ys.map((y) => (y === 244 ? 'M-36 244H0' : `M-36 ${y}C-16 ${y} -16 244 0 244`));
+  return {
+    a: { tagline: TAGLINE, lines: ['rpc-', 'agent'], art, marks: { items: marks(), place: 'row' } },
+    b: {
+      tagline: TAGLINE,
+      lines: ['rpc-', 'agent'],
+      art: { ...art, svg: lines.map((d) => path(d, ` stroke="${ART_DIM}"`)).join('') + art.svg },
+      marks: { items: marks(), place: 'art', x: -64, ys },
+    },
+  };
+};
+
+/** The README uses this one; the other is rendered as banner-<v>.png to compare. */
+const BANNER_PICK = 'a' as const;
 
 async function banner(browser: Browser) {
-  for (const [name, out] of [['banner', BANNER], ['og', OG]] as const) {
-    const raw = join(STAGE, `${name}-raw.png`);
-    await renderBanner(browser, BANNER_SPEC(), out, ROOT, raw);
-    const file = join(OUT, `${name}.png`);
-    // Everything is grey (the background is #0c0c0d), so an 8-bit greyscale
-    // PNG keeps every anti-aliased edge and is a fraction of the RGBA size.
-    ffmpeg(['-i', raw, '-pix_fmt', 'gray', '-compression_level', '9', file]);
-    console.log(`${file}  ${kb(file)}  ${1600 * out.scale * out.dpr}x${Math.round(out.height * out.scale) * out.dpr}`);
+  const specs = BANNER_SPECS();
+  for (const v of ['a', 'b'] as const) {
+    for (const [name, out] of [['banner', BANNER], ['og', OG]] as const) {
+      const raw = join(STAGE, `${name}-${v}-raw.png`);
+      await renderBanner(browser, specs[v], out, ROOT, raw);
+      const file = join(OUT, v === BANNER_PICK ? `${name}.png` : `${name}-${v}.png`);
+      // Everything is grey (the background is #0c0c0d), so an 8-bit greyscale
+      // PNG keeps every anti-aliased edge and is a fraction of the RGBA size.
+      ffmpeg(['-i', raw, '-pix_fmt', 'gray', '-compression_level', '9', file]);
+      console.log(`${file}  ${kb(file)}  ${1600 * out.scale * out.dpr}x${Math.round(out.height * out.scale) * out.dpr}`);
+    }
   }
 }
 
