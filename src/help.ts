@@ -29,16 +29,60 @@ const SHOT_OPTIONS: Row[] = [
   ['    --json', 'print the result as JSON (no colour, no progress)'],
 ];
 
+const AUTH_OPTIONS: Row[] = [
+  ['    --cookie <c>', '"name=value[; Domain=…; Path=…]", repeatable; target origin only'],
+  ['    --header <h>', '"Name: value", repeatable; sent to the target origin only'],
+  ['    --storage-state <file>', 'load a Playwright storageState JSON (cookies + localStorage)'],
+  ['    --no-session', "don't use the session saved by `rpc login` for this origin"],
+  ['    --allow-origin <o>', 'also send headers and loaded cookies to this origin, repeatable'],
+];
+
+const LOGIN_OPTIONS: Row[] = [
+  ['    --save <file>', 'write the storage state here instead of the per-origin session'],
+  ['    --form', 'headless: fill an email + password form (CI, agents)'],
+  ['    --email <email>', 'with --form; default $RPC_LOGIN_EMAIL'],
+  ['    --password <pw>', 'with --form; prefer $RPC_LOGIN_PASSWORD (keeps it out of shell history)'],
+  ['    --email-selector <css>', `default: input[type=email], input[name=email], …`],
+  ['    --password-selector <css>', 'default: input[type=password]'],
+  ['    --submit-selector <css>', 'default: button[type=submit], input[type=submit] (else Enter)'],
+  ['    --timeout <ms>', 'navigation and form timeout (default: 30000)'],
+  ['    --json', 'print the result as JSON'],
+];
+
 export const COMMANDS: Record<HelpTopic, CommandHelp> = {
   shot: {
     usage: 'rpc shot <url> [options]',
     summary: 'Capture a URL at device viewports, optionally framed in device bezels.',
-    options: SHOT_OPTIONS,
+    options: [...SHOT_OPTIONS, ...AUTH_OPTIONS],
     examples: [
       ['rpc shot localhost:3000 -d iphone-15,ipad,desktop-1440 --bezels', ''],
       ['rpc shot example.com/pricing --full-page --slices', 'whole page + review slices'],
       ['rpc shot localhost:5173 --color-scheme dark --open', 'dark mode, open when done'],
       ['rpc shot localhost:3000 -d pixel --json', 'machine-readable result'],
+      ['rpc shot localhost:3000/billing', 'uses the session saved by rpc login'],
+      ["rpc shot api.example.com/admin --header 'Authorization: Bearer $TOKEN'", ''],
+    ],
+  },
+  login: {
+    usage: 'rpc login <url> [--form] [--save <file>]',
+    summary:
+      'Open a browser window at the URL, sign in, then press Enter (or close the window). The session is saved for that ' +
+      'origin (~/.config/rpc-agent/sessions, mode 0600) and `rpc shot` uses it automatically.',
+    options: LOGIN_OPTIONS,
+    examples: [
+      ['rpc login localhost:3000/sign-in', 'sign in by hand in a window'],
+      ['RPC_LOGIN_EMAIL=me@x.test RPC_LOGIN_PASSWORD=… rpc login localhost:3000/sign-in --form', 'CI / agents'],
+      ['rpc login example.com --save auth.json', 'write a storageState file instead'],
+    ],
+  },
+  sessions: {
+    usage: 'rpc sessions [list] | rpc sessions clear [origin]',
+    summary: 'List the sessions saved by `rpc login` (origins, cookie counts, expiry; never values), or delete them.',
+    options: [['    --json', 'print as JSON']],
+    examples: [
+      ['rpc sessions', ''],
+      ['rpc sessions clear localhost:3000', 'forget one origin'],
+      ['rpc sessions clear', 'forget all'],
     ],
   },
   devices: {
@@ -57,19 +101,25 @@ export const COMMANDS: Record<HelpTopic, CommandHelp> = {
     examples: [['rpc doctor', 'exits 1 when Chromium is missing']],
   },
   install: {
-    usage: 'rpc install',
+    usage: 'rpc install [--headed]',
     summary: "Download Playwright's Chromium with the Playwright version rpc uses, then run doctor.",
-    examples: [['rpc install', '']],
+    options: [['    --headed', 'also download full Chromium, for the window `rpc login` opens']],
+    examples: [
+      ['rpc install', 'headless shell only (captures)'],
+      ['rpc install --headed', 'for rpc login'],
+    ],
   },
   mcp: {
     usage: 'rpc mcp',
-    summary: 'Run the MCP server on stdio (tools: screenshot, list_devices).',
+    summary: 'Run the MCP server on stdio (tools: screenshot, list_devices, list_sessions).',
     examples: [['claude mcp add --scope user rpc -- node /abs/path/dist/cli.js mcp', 'add to Claude Code']],
   },
 };
 
 const TOP: Row[] = [
   ['shot <url>', 'capture screenshots'],
+  ['login <url>', 'sign in once; later shots of that origin use the session'],
+  ['sessions', 'list or clear saved sessions'],
   ['devices', 'list device ids and aliases'],
   ['doctor', "check that Playwright's Chromium is installed and launches"],
   ['install', "download Playwright's Chromium (same version rpc uses)"],
@@ -109,6 +159,9 @@ export function richHelp(c: Colors): string {
     '',
     c.bold('Shot options:'),
     ...table(SHOT_OPTIONS, c),
+    '',
+    c.bold('Auth options:'),
+    ...table(AUTH_OPTIONS, c),
     '',
     c.bold('Examples:'),
     ...examples(COMMANDS.shot.examples, c),

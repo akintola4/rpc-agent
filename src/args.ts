@@ -1,8 +1,12 @@
-import { parseArgs } from 'node:util';
+import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
+import { parseCookie, parseHeader, resolveAuth, toOrigin, type AuthOptions } from './auth.js';
 import { resolveDevices } from './devices.js';
+import type { FormLogin } from './login.js';
 import {
   COLOR_SCHEMES,
+  DEFAULT_TIMEOUT_MS,
   defaultShotOptions,
+  normalizeUrl,
   type ColorScheme,
   type ShotOptions,
 } from './options.js';
@@ -12,11 +16,26 @@ export type Command =
   | { command: 'devices'; json: boolean }
   | { command: 'mcp' }
   | { command: 'doctor'; json: boolean }
-  | { command: 'install' }
+  | { command: 'install'; headed?: true }
+  | LoginCommand
+  | { command: 'sessions'; action: 'list' | 'clear'; origin?: string; json: boolean }
   | { command: 'help'; topic?: HelpTopic }
   | { command: 'version' };
 
-export const HELP_TOPICS = ['shot', 'devices', 'doctor', 'install', 'mcp'] as const;
+export interface LoginCommand {
+  command: 'login';
+  url: string;
+  /** Storage state file to write instead of the per-origin session. */
+  save?: string;
+  /** Headless form login (CI, agents). */
+  form?: FormLogin;
+  /** The password came from --password (shell history, process list). */
+  passwordFromFlag?: true;
+  timeoutMs: number;
+  json: boolean;
+}
+
+export const HELP_TOPICS = ['shot', 'login', 'sessions', 'devices', 'doctor', 'install', 'mcp'] as const;
 export type HelpTopic = (typeof HELP_TOPICS)[number];
 
 function isTopic(s: string | undefined): s is HelpTopic {
@@ -35,10 +54,13 @@ export const USAGE = `rpc - screenshot a URL at device viewports, optionally in 
 
 Usage:
   rpc shot <url> [options]   capture screenshots
+  rpc login <url> [--form]   sign in once and save the session for that origin
+  rpc sessions [list|clear [origin]]
+                             list or delete saved sessions
   rpc devices [--json]       list device ids and aliases
   rpc mcp                    run the MCP server on stdio
   rpc doctor [--json]        check that Playwright's Chromium is installed and launches
-  rpc install                download Playwright's Chromium (same version rpc uses)
+  rpc install [--headed]     download Playwright's Chromium (same version rpc uses)
 
 Shot options:
   -d, --devices <ids>        comma-separated device ids or aliases
@@ -59,15 +81,24 @@ Shot options:
       --json                 print the result as JSON
       --open                 open the output folder when done
 
+Auth options (values are never printed):
+      --cookie <c>           "name=value[; Domain=…; Path=…]", repeatable;
+                             sent to the target origin only
+      --header <h>           "Name: value", repeatable; target origin only
+      --storage-state <file> load a Playwright storageState JSON
+      --no-session           don't use the session saved by \`rpc login\`
+      --allow-origin <o>     also send headers/cookies to this origin, repeatable
+
 Run \`rpc help <command>\` for one command's options and examples.
 Run \`rpc\` with no arguments in a terminal for an interactive capture.
 
 Examples:
   rpc shot localhost:3000 -d iphone-15,ipad,desktop-1440 --bezels
   rpc shot https://example.com --full-page --color-scheme dark
+  rpc login localhost:3000/sign-in && rpc shot localhost:3000/dashboard
 `;
 
-export function parseCli(argv: readonly string[]): Command {
+export function parseCli(argv: readonly string[], env: NodeJS.ProcessEnv = process.env): Command {
   const [cmd, ...rest] = argv;
   switch (cmd) {
     case undefined:
@@ -85,9 +116,15 @@ export function parseCli(argv: readonly string[]): Command {
     case 'mcp':
       if (wantsHelp(rest)) return { command: 'help', topic: 'mcp' };
       return { command: 'mcp' };
-    case 'install':
+    case 'install': {
       if (wantsHelp(rest)) return { command: 'help', topic: 'install' };
-      return { command: 'install' };
+      const { values } = parse(rest, { headed: { type: 'boolean' } }, false);
+      return values.headed ? { command: 'install', headed: true } : { command: 'install' };
+    }
+    case 'login':
+      return parseLogin(rest, env);
+    case 'sessions':
+      return parseSessions(rest);
     case 'doctor': {
       if (wantsHelp(rest)) return { command: 'help', topic: 'doctor' };
       const { values } = parse(rest, { json: { type: 'boolean' } }, false);
@@ -125,6 +162,11 @@ function parseShot(args: string[]): Command {
       'reduced-motion': { type: 'boolean' },
       json: { type: 'boolean' },
       open: { type: 'boolean' },
+      cookie: { type: 'string', multiple: true },
+      header: { type: 'string', multiple: true },
+      'storage-state': { type: 'string' },
+      'no-session': { type: 'boolean' },
+      'allow-origin': { type: 'string', multiple: true },
     },
     true
   );
@@ -171,14 +213,97 @@ function parseShot(args: string[]): Command {
     options.maxHeight = parseInt_('--max-height', values['max-height'], 500, 200_000);
   }
 
+  const auth: AuthOptions = {};
+  try {
+    if (values.cookie?.length) auth.cookies = values.cookie.map(parseCookie);
+    if (values.header?.length) auth.headers = Object.fromEntries(values.header.map(parseHeader));
+    if (typeof values['storage-state'] === 'string') auth.storageState = values['storage-state'];
+    if (values['no-session']) auth.useSession = false;
+    if (values['allow-origin']?.length) auth.allowOrigins = values['allow-origin'].flatMap(splitList).map(toOrigin);
+    if (Object.keys(auth).length) {
+      resolveAuth(options.url, auth); // validate now: bad input is a usage error
+      options.auth = auth;
+    }
+  } catch (err) {
+    throw new ArgError((err as Error).message);
+  }
+
   return { command: 'shot', options, json: Boolean(values.json), open: Boolean(values.open) };
 }
 
-type Spec = NonNullable<Parameters<typeof parseArgs>[0]>['options'];
-
-function parse<T extends Spec>(args: string[], options: T, allowPositionals: boolean) {
+function parseLogin(args: string[], env: NodeJS.ProcessEnv): Command {
+  if (wantsHelp(args)) return { command: 'help', topic: 'login' };
+  const { values, positionals } = parse(
+    args,
+    {
+      save: { type: 'string' },
+      form: { type: 'boolean' },
+      email: { type: 'string' },
+      password: { type: 'string' },
+      'email-selector': { type: 'string' },
+      'password-selector': { type: 'string' },
+      'submit-selector': { type: 'string' },
+      timeout: { type: 'string' },
+      json: { type: 'boolean' },
+    },
+    true
+  );
+  if (positionals.length !== 1) throw new ArgError('Usage: rpc login <url> [--form] [--save <file>]');
+  let url: string;
   try {
-    return parseArgs({ args, options: options!, allowPositionals, strict: true });
+    url = normalizeUrl(positionals[0]!);
+    toOrigin(url);
+  } catch (err) {
+    throw new ArgError((err as Error).message);
+  }
+  const cmd: LoginCommand = {
+    command: 'login',
+    url,
+    timeoutMs: typeof values.timeout === 'string' ? parseMs('--timeout', values.timeout) : DEFAULT_TIMEOUT_MS,
+    json: Boolean(values.json),
+  };
+  if (typeof values.save === 'string') cmd.save = values.save;
+
+  const formOnly = ['email', 'password', 'email-selector', 'password-selector', 'submit-selector'] as const;
+  if (!values.form) {
+    const used = formOnly.filter(k => values[k] !== undefined);
+    if (used.length) throw new ArgError(`--${used[0]} needs --form`);
+    return cmd;
+  }
+  const email = values.email ?? env.RPC_LOGIN_EMAIL;
+  const password = values.password ?? env.RPC_LOGIN_PASSWORD;
+  if (!email) throw new ArgError('--form needs an email: set RPC_LOGIN_EMAIL (or pass --email)');
+  if (!password) throw new ArgError('--form needs a password: set RPC_LOGIN_PASSWORD');
+  cmd.form = {
+    email,
+    password,
+    ...(values['email-selector'] ? { emailSelector: values['email-selector'] } : {}),
+    ...(values['password-selector'] ? { passwordSelector: values['password-selector'] } : {}),
+    ...(values['submit-selector'] ? { submitSelector: values['submit-selector'] } : {}),
+  };
+  if (values.password !== undefined) cmd.passwordFromFlag = true;
+  return cmd;
+}
+
+function parseSessions(args: string[]): Command {
+  if (wantsHelp(args)) return { command: 'help', topic: 'sessions' };
+  const { values, positionals } = parse(args, { json: { type: 'boolean' } }, true);
+  const [action = 'list', origin, ...extra] = positionals;
+  if (action !== 'list' && action !== 'clear') throw new ArgError(`Unknown sessions action "${action}". Use list or clear.`);
+  if (extra.length || (action === 'list' && origin)) throw new ArgError('Usage: rpc sessions list | rpc sessions clear [origin]');
+  if (origin) {
+    try {
+      toOrigin(origin);
+    } catch (err) {
+      throw new ArgError((err as Error).message);
+    }
+  }
+  return { command: 'sessions', action, ...(origin ? { origin } : {}), json: Boolean(values.json) };
+}
+
+function parse<const T extends ParseArgsOptionsConfig>(args: string[], options: T, allowPositionals: boolean) {
+  try {
+    return parseArgs({ args, options, allowPositionals, strict: true });
   } catch (err) {
     throw new ArgError((err as Error).message);
   }

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { relative } from 'node:path';
-import { ArgError, parseCli, USAGE } from './args.js';
+import { ArgError, parseCli, USAGE, type LoginCommand } from './args.js';
+import { clearSessions, describeAuth, listSessions, sessionsDir, type SessionInfo } from './auth.js';
 import { doctor, installChromium, type DoctorReport } from './browser.js';
 import { capture, type DeviceShot } from './capture.js';
 import { CATEGORY_LABELS, CATEGORY_ORDER, DEVICE_ALIASES, DEVICES } from './devices.js';
-import { currentMode, openPath } from './term.js';
+import { currentMode, openPath, waitForEnter } from './term.js';
 
 /** Plain-output colours: identity unless FORCE_COLOR asks for colour. */
 interface Paint {
@@ -83,7 +84,7 @@ async function main(argv: string[]): Promise<number> {
       return report.ok ? 0 : 1;
     }
     case 'install': {
-      const code = await installChromium();
+      const code = await installChromium({ headed: Boolean(cmd.headed) });
       if (code !== 0) return code;
       if (mode.rich) {
         const { ui, c } = await loadUi();
@@ -98,12 +99,80 @@ async function main(argv: string[]): Promise<number> {
         const { ui, c } = await loadUi();
         return ui.runShot(cmd.options, { open: cmd.open }, c);
       }
-      const result = await capture(cmd.options, cmd.json ? {} : { onDevice: printShot });
+      const result = await capture(
+        cmd.options,
+        cmd.json ? {} : { onDevice: printShot, onAuth: a => console.log(`auth: ${describeAuth(a)}`) }
+      );
       if (cmd.json) console.log(JSON.stringify(result, null, 2));
       if (cmd.open && result.shots.some(s => !s.error)) openPath(result.outDir);
       return result.shots.some(s => s.error) ? 1 : 0;
     }
+    case 'login': {
+      if (cmd.passwordFromFlag) {
+        console.error(`rpc: ${paint.warn('warning:')} --password is visible in shell history and the process list; set RPC_LOGIN_PASSWORD instead`);
+      }
+      if (mode.rich) {
+        const { ui, c } = await loadUi();
+        return ui.runLogin(cmd, c);
+      }
+      return plainLogin(cmd);
+    }
+    case 'sessions': {
+      if (mode.rich) {
+        const { ui, c } = await loadUi();
+        return ui.runSessions(cmd.action, cmd.origin, c);
+      }
+      if (cmd.action === 'clear') {
+        const gone = await clearSessions(cmd.origin);
+        if (cmd.json) console.log(JSON.stringify({ removed: gone }, null, 2));
+        else if (gone.length === 0) console.log(cmd.origin ? `No saved session for ${cmd.origin}` : 'No saved sessions');
+        else for (const o of gone) console.log(`removed ${o}`);
+        return 0;
+      }
+      const list = await listSessions();
+      if (cmd.json) console.log(JSON.stringify({ dir: sessionsDir(), sessions: list }, null, 2));
+      else if (list.length === 0) console.log(`No saved sessions in ${sessionsDir()}. Create one with: rpc login <url>`);
+      else for (const s of list) console.log(sessionLine(s));
+      return 0;
+    }
   }
+}
+
+async function plainLogin(cmd: LoginCommand): Promise<number> {
+  const { formLogin, interactiveLogin } = await import('./login.js');
+  let result;
+  if (cmd.form) {
+    if (!cmd.json) console.log(`signing in at ${cmd.url} (headless form)`);
+    result = await formLogin(cmd, cmd.form);
+  } else {
+    const enter = waitForEnter();
+    try {
+      result = await interactiveLogin(cmd, enter.promise, () => {
+        if (!cmd.json) console.log(`Opened ${cmd.url}. Sign in in the browser window, then press Enter here (or close the window).`);
+      });
+    } finally {
+      enter.stop();
+    }
+  }
+  if (cmd.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log(`${paint.ok('saved')} session for ${result.origin}: ${result.path} (${result.cookies} cookie(s), ${result.localStorage} localStorage origin(s))`);
+    if (result.stillOnLogin) {
+      console.error(`${paint.warn('warning:')} the page was still on a login URL (${result.finalUrl}); the sign-in may not have finished`);
+    }
+  }
+  return 0;
+}
+
+function sessionLine(s: SessionInfo): string {
+  const when = (iso?: string) => (iso ? iso.slice(0, 16).replace('T', ' ') : '');
+  const parts = [s.origin, `${s.cookies} cookie(s)`];
+  if (s.savedAt) parts.push(`saved ${when(s.savedAt)}`);
+  if (s.expired) parts.push(paint.bad(`expired ${when(s.expires)}`));
+  else if (s.expires) parts.push(`expires ${when(s.expires)}`);
+  parts.push(rel(s.path));
+  return parts.join('  ');
 }
 
 function rel(p: string): string {
