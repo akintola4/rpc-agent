@@ -59,3 +59,23 @@ export function openPath(path: string): boolean {
     return false;
   }
 }
+
+/**
+ * Resolve when a line (Enter) arrives on stdin. EOF never resolves it, so a
+ * caller can race it against something else (the login window closing).
+ */
+export function waitForEnter(input: NodeJS.ReadStream = process.stdin): { promise: Promise<void>; stop: () => void } {
+  let onData: (chunk: Buffer | string) => void = () => {};
+  const promise = new Promise<void>(res => {
+    onData = chunk => {
+      if (/[\r\n]/.test(String(chunk))) res();
+    };
+    input.on('data', onData);
+    input.resume();
+  });
+  const stop = () => {
+    input.off('data', onData);
+    input.pause();
+  };
+  return { promise, stop };
+}

@@ -1,6 +1,15 @@
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename, extname, resolve } from 'node:path';
 import type { Browser, Page } from 'playwright';
+import {
+  applyHeaders,
+  AuthRequiredError,
+  redact,
+  redirectedToLogin,
+  resolveAuth,
+  type AuthSummary,
+  type ResolvedAuth,
+} from './auth.js';
 import { launchBrowser } from './browser.js';
 import { renderFramed, renderSlices, type Segment } from './composite.js';
 import { explainError } from './errors.js';
@@ -75,6 +84,8 @@ export interface ShotResult {
   url: string;
   outDir: string;
   shots: DeviceShot[];
+  /** Present only when cookies, headers, a storage state or a saved session were involved. Values are masked. */
+  auth?: AuthSummary;
 }
 
 export interface CaptureHooks {
@@ -91,12 +102,18 @@ export interface CaptureHooks {
    * `opts.saveSlices === false`.
    */
   inlineSlices?: boolean;
+  /** Auth already resolved by the caller (to show it before capture); otherwise resolved here. */
+  auth?: ResolvedAuth;
+  /** Called once with the masked auth summary, before the first device, when auth is in play. */
+  onAuth?: (summary: AuthSummary) => void;
 }
 
 export async function capture(opts: ShotOptions, hooks: CaptureHooks = {}): Promise<ShotResult> {
   const devices = resolveDevices(opts.devices);
   const outDir = resolve(opts.outDir);
+  const auth = hooks.auth ?? resolveAuth(opts.url, opts.auth ?? {});
   await mkdir(outDir, { recursive: true });
+  if (auth.summary) hooks.onAuth?.(auth.summary);
 
   const browser = hooks.browser ?? (await launchBrowser());
   try {
@@ -105,19 +122,30 @@ export async function capture(opts: ShotOptions, hooks: CaptureHooks = {}): Prom
       let shot: DeviceShot;
       hooks.onDeviceStart?.(device);
       try {
-        shot = await captureDevice(browser, device, opts, outDir, hooks);
+        shot = await captureDevice(browser, device, opts, outDir, hooks, auth);
       } catch (err) {
         shot = baseShot(device);
-        const e = explainError(err, { url: opts.url, timeoutMs: opts.timeoutMs, waitFor: opts.waitFor });
-        shot.error = e.error;
-        shot.code = e.code;
-        if (e.hint) shot.hint = e.hint;
+        if (err instanceof AuthRequiredError) {
+          shot.status = err.status;
+          shot.finalUrl = err.finalUrl;
+          shot.error = err.message;
+          shot.code = err.code;
+          shot.hint = err.hint;
+        } else {
+          const e = explainError(err, { url: opts.url, timeoutMs: opts.timeoutMs, waitFor: opts.waitFor });
+          shot.error = redact(e.error, auth.secrets);
+          shot.code = e.code;
+          if (e.hint) shot.hint = redact(e.hint, auth.secrets);
+        }
+      }
+      if (shot.consoleErrors?.length && auth.secrets.length) {
+        shot.consoleErrors = shot.consoleErrors.map(l => redact(l, auth.secrets));
       }
       if (!hooks.keepBuffers) delete shot.buffers;
       hooks.onDevice?.(shot);
       shots.push(shot);
     }
-    return { url: opts.url, outDir, shots };
+    return { url: opts.url, outDir, shots, ...(auth.summary ? { auth: auth.summary } : {}) };
   } finally {
     if (!hooks.browser) await browser.close();
   }
@@ -137,7 +165,8 @@ async function captureDevice(
   device: Device,
   opts: ShotOptions,
   outDir: string,
-  hooks: CaptureHooks
+  hooks: CaptureHooks,
+  auth: ResolvedAuth
 ): Promise<DeviceShot> {
   const emu = opts.emulate ? emulationFor(device) : undefined;
   const context = await browser.newContext({
@@ -149,12 +178,15 @@ async function captureDevice(
     ...(opts.colorScheme ? { colorScheme: opts.colorScheme } : {}),
     ...(opts.reducedMotion ? { reducedMotion: 'reduce' as const } : {}),
     ignoreHTTPSErrors: true, // self-signed local dev certs
+    ...(auth.state ? { storageState: auth.state } : {}),
   });
+  if (auth.cookies.length) await context.addCookies(auth.cookies);
   const result = baseShot(device);
   const errors = new Set<string>();
 
   try {
     const page = await context.newPage();
+    await applyHeaders(context, page, auth);
     page.on('pageerror', e => errors.add(`pageerror: ${e.message}`));
     page.on('console', m => {
       if (m.type() === 'error') errors.add(`console: ${m.text()}`);
@@ -163,14 +195,25 @@ async function captureDevice(
     const response = await page.goto(opts.url, { waitUntil: 'load', timeout: opts.timeoutMs });
     result.status = response?.status() ?? null;
     await settle(page, opts.timeoutMs);
+    // A login page instead of the requested one: say so rather than capture it.
+    const checkLogin = () => {
+      if (redirectedToLogin(opts.url, page.url())) throw new AuthRequiredError(opts.url, page.url(), result.status ?? null);
+    };
+    checkLogin();
     if (opts.waitFor) {
-      await page.waitForSelector(opts.waitFor, { state: 'visible', timeout: opts.timeoutMs });
+      try {
+        await page.waitForSelector(opts.waitFor, { state: 'visible', timeout: opts.timeoutMs });
+      } catch (err) {
+        checkLogin();
+        throw err;
+      }
     }
     if (opts.fullPage) {
       await warmUpScroll(page, opts.maxHeight);
       await settle(page, opts.timeoutMs);
     }
     if (opts.waitMs > 0) await page.waitForTimeout(opts.waitMs);
+    checkLogin();
 
     result.finalUrl = page.url();
     result.title = await page.title();

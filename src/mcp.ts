@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { describeAuth, listSessions, resolveAuth, sessionsDir, toOrigin, type AuthOptions, type AuthSummary } from './auth.js';
 import { capture, launchBrowser, type DeviceShot } from './capture.js';
 import { renderPreview } from './composite.js';
 import {
@@ -88,6 +89,37 @@ const screenshotInput = {
     .boolean()
     .optional()
     .describe('Return JPEG previews inline: one per device, or the full-page slices when fullPage. Default true.'),
+  cookies: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        value: z.string(),
+        domain: z.string().optional().describe('Default: the target host only. Must match the target host (or an allowOrigins host).'),
+        path: z.string().optional().describe('Default /.'),
+      })
+    )
+    .max(50)
+    .optional()
+    .describe('Cookies set on the target origin before loading. Values are never echoed back.'),
+  headers: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe('Request headers, e.g. {"Authorization": "Bearer …"}. Sent only to the target origin (and allowOrigins), never to third-party requests or redirects. Values are never echoed back.'),
+  storageState: z
+    .string()
+    .optional()
+    .describe("Path to a Playwright storageState JSON (cookies + localStorage), relative to the server's cwd. Only the target origin's entries are loaded."),
+  useSession: z
+    .boolean()
+    .optional()
+    .describe(
+      'Use the session saved by `rpc login <url>` for the target origin. Default true when one exists (see list_sessions). Ignored when storageState is set.'
+    ),
+  allowOrigins: z
+    .array(z.string())
+    .max(10)
+    .optional()
+    .describe('Extra origins (e.g. an API host) that also get the headers and loaded cookies.'),
 };
 
 export function createServer(): McpServer {
@@ -107,6 +139,12 @@ export function createServer(): McpServer {
     async args => {
       let options: ShotOptions;
       try {
+        const auth: AuthOptions = {};
+        if (args.cookies?.length) auth.cookies = args.cookies;
+        if (args.headers && Object.keys(args.headers).length) auth.headers = args.headers;
+        if (args.storageState) auth.storageState = args.storageState;
+        if (args.useSession === false) auth.useSession = false;
+        if (args.allowOrigins?.length) auth.allowOrigins = args.allowOrigins.map(toOrigin);
         options = {
           url: normalizeUrl(args.url),
           devices: resolveDevices(args.devices ?? DEFAULT_DEVICES).map(d => d.id),
@@ -123,7 +161,9 @@ export function createServer(): McpServer {
           saveSlices: args.saveSlices,
           maxSlices: args.maxSlices ?? DEFAULT_MAX_SLICES,
           sliceWidth: args.sliceWidth ?? DEFAULT_SLICE_WIDTH,
+          ...(Object.keys(auth).length ? { auth } : {}),
         };
+        resolveAuth(options.url, auth); // bad cookies/headers/storage state: a tool error, before launching
       } catch (err) {
         return { isError: true, content: [{ type: 'text', text: (err as Error).message }] };
       }
@@ -141,9 +181,9 @@ export function createServer(): McpServer {
           {
             type: 'text',
             text:
-              headline(result.shots, options) +
+              headline(result.shots, options, result.auth) +
               '\n\n' +
-              JSON.stringify(summarise(result.url, result.outDir, result.shots), null, 2),
+              JSON.stringify(summarise(result.url, result.outDir, result.shots, result.auth), null, 2),
           },
         ];
 
@@ -201,6 +241,39 @@ export function createServer(): McpServer {
     }
   );
 
+  server.registerTool(
+    'list_sessions',
+    {
+      title: 'List saved login sessions',
+      description:
+        'List the origins that have a session saved by `rpc login` (used automatically by screenshot for that origin): ' +
+        'cookie count, when it was saved, and whether it has expired. Never returns cookie values.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      const list = await listSessions();
+      if (list.length === 0) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text:
+                `No saved sessions in ${sessionsDir()}. The user can create one with \`rpc login <url>\` ` +
+                '(a browser window) or `rpc login <url> --form` with RPC_LOGIN_EMAIL / RPC_LOGIN_PASSWORD set.',
+            },
+          ],
+        };
+      }
+      const lines = list.map(
+        s =>
+          `${s.origin}: ${s.cookies} cookie(s)${s.savedAt ? `, saved ${s.savedAt}` : ''}` +
+          `${s.expired ? `, EXPIRED ${s.expires} (run \`rpc login ${s.origin}\`)` : s.expires ? `, expires ${s.expires}` : ''}`
+      );
+      return { content: [{ type: 'text', text: lines.join('\n') + '\n\n' + JSON.stringify({ dir: sessionsDir(), sessions: list }, null, 2) }] };
+    }
+  );
+
   return server;
 }
 
@@ -228,8 +301,13 @@ async function fullPageImages(
 }
 
 /** Plain-language first lines: failures with hints, and what full-page output covers. */
-export function headline(shots: DeviceShot[], options: Pick<ShotOptions, 'fullPage' | 'maxSlices' | 'maxHeight'>): string {
+export function headline(
+  shots: DeviceShot[],
+  options: Pick<ShotOptions, 'fullPage' | 'maxSlices' | 'maxHeight'>,
+  auth?: AuthSummary
+): string {
   const lines: string[] = [];
+  if (auth) lines.push(`auth: ${describeAuth(auth)}`);
   const failed = shots.filter(s => s.error);
   if (failed.length === shots.length) lines.push(`All ${shots.length} device(s) failed.`);
   for (const s of shots) {
@@ -275,11 +353,12 @@ export function headline(shots: DeviceShot[], options: Pick<ShotOptions, 'fullPa
   return lines.join('\n');
 }
 
-function summarise(url: string, outDir: string, shots: DeviceShot[]) {
+function summarise(url: string, outDir: string, shots: DeviceShot[], auth?: AuthSummary) {
   return {
     url,
     outDir,
     shots: shots.map(({ buffers: _b, ...s }) => s),
+    ...(auth ? { auth } : {}),
   };
 }
 

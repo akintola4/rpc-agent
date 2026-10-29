@@ -37,7 +37,8 @@ Chromium is not downloaded when the package installs. `rpc install` (or
 `npx rpc-agent install`) fetches it with rpc's own Playwright version, so
 the browser always matches the one rpc launches. It installs only
 Chromium's headless shell (plus Playwright's small ffmpeg), not the full
-Chrome for Testing build, since rpc never opens a visible window. Until you run it, every
+Chrome for Testing build, since captures never open a visible window
+(`rpc install --headed` adds it for `rpc login`). Until you run it, every
 command says Chromium is missing and prints that command, instead of
 failing with Playwright's own error. Browsers go to Playwright's usual
 cache, so other Playwright projects on the same version share them.
@@ -62,9 +63,11 @@ these docs say `rpc`, or `pnpm rpc` from inside the repo.
 ```sh
 rpc                    # interactive: pick a URL, devices and options
 rpc shot <url> [options]
+rpc login <url> [--form]   # sign in once; later shots of that origin use the session
+rpc sessions [list|clear [origin]]
 rpc devices [--json]
 rpc doctor [--json]    # is Chromium installed, and does it launch?
-rpc install            # download Chromium with rpc's own Playwright version
+rpc install [--headed] # download Chromium with rpc's own Playwright version
 rpc mcp
 rpc help <command>     # options and examples for one command
 ```
@@ -98,6 +101,11 @@ the files it wrote:
 | `--no-emulate` | Viewport and DPR only: no mobile user agent or touch |
 | `--json` | Print the result as JSON |
 | `--open` | Open the output folder when done (`open`, `xdg-open` or `explorer`) |
+| `--cookie <c>` | `name=value[; Domain=…; Path=…]`, repeatable. See [Authenticated pages](#authenticated-pages) |
+| `--header <h>` | `Name: value`, repeatable, sent to the target origin only |
+| `--storage-state <file>` | Load a Playwright storageState JSON |
+| `--no-session` | Don't use the session saved by `rpc login` |
+| `--allow-origin <o>` | Also send headers and loaded cookies to this origin, repeatable |
 
 The URL can be a full URL, a bare local host (`localhost:3000` becomes
 `http://`), a bare domain (`example.com` becomes `https://`) or a path to a
@@ -170,9 +178,130 @@ listening on port N"), proxy, tunnel and offline errors, TLS errors (https
 against a plain-http dev server), missing files, redirect loops, navigation
 and `--wait-for` timeouts.
 
+## Authenticated pages
+
+Dashboards, billing and settings pages sit behind a login. rpc can carry a
+session so you don't need a hand-written "sign in, then screenshot" script.
+
+### Sign in once with `rpc login`
+
+```sh
+rpc login localhost:3000/sign-in
+rpc shot localhost:3000/app/settings/billing -d iphone-15,desktop-1440 --bezels
+```
+
+`rpc login` opens a browser window at the URL. Sign in as you normally
+would (SSO and 2FA work, it's a real browser), then press Enter in the
+terminal or close the window. rpc saves the browser's storage state
+(cookies and localStorage) to
+`~/.config/rpc-agent/sessions/<origin>.json`, for example
+`http-localhost-3000.json`. From then on, `rpc shot` on that origin uses it
+automatically, and the output says so:
+
+```
+auth: session http://localhost:3000 (saved 2026-10-29 22:55)
+ok iphone-15 (393x852 @3x)
+```
+
+The window needs full Chromium, which `rpc install` doesn't download (it
+fetches only the headless shell). Run `rpc install --headed` once, or have
+Google Chrome installed; rpc falls back to it.
+
+`--save <file>` writes the storage state to a file of your choice instead;
+use it with `rpc shot --storage-state <file>`.
+
+```sh
+rpc sessions                      # origins, cookie counts, saved and expiry times
+rpc sessions clear localhost:3000 # forget one origin
+rpc sessions clear                # forget all
+rpc shot localhost:3000/app --no-session   # capture as a signed-out visitor
+```
+
+### When the session is missing or expired
+
+If the page redirects to a login URL (a path segment like `/login`,
+`/sign-in`, `/signin` or `/auth`, different from the one you asked for),
+rpc doesn't screenshot the sign-in form. The device fails with code
+`AUTH_REQUIRED`:
+
+```
+x iphone-15 (393x852 @3x): Redirected to a login page (http://localhost:3000/sign-in) instead of http://localhost:3000/app/settings/billing
+   hint: Session missing or expired: run `rpc login http://localhost:3000`
+```
+
+A saved session whose cookies have all passed their expiry isn't loaded,
+and gives the same hint.
+
+### CI and agents: `rpc login --form`
+
+Without a person at the keyboard, `--form` signs in headlessly through a
+standard email + password form:
+
+```sh
+export RPC_LOGIN_EMAIL=ci@example.test
+export RPC_LOGIN_PASSWORD=...        # from your CI secret store
+rpc login https://staging.example.com/sign-in --form
+rpc shot https://staging.example.com/app/billing --json
+```
+
+It loads the page, waits for it to settle (so a client-side form has
+hydrated), fills the first match of `--email-selector` (default
+`input[type=email]`, then `autocomplete=username`, `name=email`,
+`name=username`, `#email`) and `--password-selector` (default
+`input[type=password]`), clicks `--submit-selector` (default
+`button[type=submit], input[type=submit]`, or presses Enter if there is no
+button), and waits for the URL to leave the login page. If it doesn't
+within `--timeout`, it fails and quotes any alert the page shows ("Invalid
+email or password"). `--email` works as a flag too; see the security notes
+before using `--password`.
+
+### Cookies and headers
+
+```sh
+rpc shot localhost:3000/app --cookie "session=$SESSION"
+rpc shot app.example.com/admin --cookie "sid=$SID; Domain=example.com; Path=/"
+rpc shot api.example.com/docs --header "Authorization: Bearer $TOKEN"
+rpc shot localhost:3000/app --storage-state auth.json
+```
+
+- `--cookie` is host-only on the target unless you give a `Domain`, which
+  must match the target host (or an `--allow-origin` host). `Secure`,
+  `HttpOnly` and `SameSite` are accepted too.
+- `--header` is sent only on requests to the target origin. Images,
+  scripts and API calls to other origins don't get it, and neither does a
+  redirect to another host (every redirect hop is checked).
+- `--storage-state` and saved sessions load only the target origin's
+  cookies and localStorage, even if the file holds others (an SSO domain,
+  analytics).
+- `--allow-origin https://api.example.com` widens all of the above to
+  another origin, for an app that calls a separate API host.
+- A saved session is used unless `--no-session` or `--storage-state` is
+  given. Cookies and headers are added on top of it.
+
+### Security notes
+
+- **Values are never printed.** Plain, rich and `--json` output and MCP
+  results show cookie and header names with `•••`. Console errors and
+  failure messages are scrubbed of every value rpc injected. The `--json`
+  result gains an `auth` field, for example
+  `{"cookies":[{"name":"sid","value":"•••","domain":"localhost","path":"/"}]}`.
+- **Session files are credentials.** They are written with mode 0600 in a
+  0700 directory (`$XDG_CONFIG_HOME/rpc-agent/sessions` if set;
+  `RPC_SESSIONS_DIR` overrides the location). Anyone who can read one can
+  act as you on that site until it expires. `rpc sessions clear` deletes
+  them. Don't commit a `--save` file.
+- **Keep passwords out of shell history.** Prefer `RPC_LOGIN_PASSWORD` from
+  a secret store over `--password`, which lands in your shell history and
+  is visible to other users in the process list; rpc warns when you use it.
+  The same goes for tokens in `--cookie` and `--header`: pass them from an
+  environment variable (`--header "Authorization: Bearer $TOKEN"`), not
+  literally.
+- **Use a test account.** Sign in as a user whose data you're happy for
+  screenshots (and the agent reading them) to see.
+
 ## MCP server
 
-`rpc mcp` runs an MCP server on stdio with two tools.
+`rpc mcp` runs an MCP server on stdio with three tools.
 
 ### `screenshot`
 
@@ -189,6 +318,11 @@ and `--wait-for` timeouts.
 | `reducedMotion` | false | emulate `prefers-reduced-motion: reduce` |
 | `waitFor`, `waitMs`, `colorScheme`, `outDir`, `timeoutMs` | | as in the CLI |
 | `inline` | true | return images, not just paths |
+| `cookies` | | `[{ name, value, domain?, path? }]`, set on the target origin |
+| `headers` | | `{ "Authorization": "Bearer …" }`, sent to the target origin only |
+| `storageState` | | path to a Playwright storageState JSON |
+| `useSession` | true when one exists | use the session saved by `rpc login` for the origin |
+| `allowOrigins` | | extra origins that also get the headers and cookies |
 
 The result starts with a plain-text block: one line per device (or the error
 and hint), followed by the JSON summary (file paths, pixel sizes,
@@ -215,10 +349,21 @@ skipped (`slices 11-26 (y=8520-21656 css px) skipped inline`), all slices are
 written to disk and the summary gives their paths and the full PNG, so the
 agent can Read the rest without slicing anything itself.
 
+When auth is in play the text starts with an `auth:` line naming the
+session, cookies and headers (values masked), and the JSON summary gains an
+`auth` field. A capture that lands on a login page fails with
+`AUTH_REQUIRED` and the `rpc login` hint. Signing in is something the user
+does in a terminal (`rpc login`); the agent then just calls `screenshot`.
+
 ### `list_devices`
 
 Takes an optional `category` (`apple-phone`, `android-phone`, `tablet`,
 `laptop`) and returns ids, sizes and aliases.
+
+### `list_sessions`
+
+Lists the origins with a saved session: cookie count, when it was saved and
+whether it has expired. Never returns values.
 
 Files go to `outDir`, which is resolved against the server's working
 directory. Claude Code and Cursor start the server in the project root; in
@@ -317,7 +462,9 @@ from the `skills` CLI, are in `docs/cli-design.md`.
 - The bezel geometry is RPC's, unchanged. On kind-default phones the page
   covers the dynamic island or notch, and generic monitors are drawn edge to
   edge with only the stand showing.
-- No auth, cookies, custom headers or scripted interaction before capture.
+- No scripted interaction before capture (beyond `rpc login --form`).
+- Login-page detection goes by the URL path. An app that shows its sign-in
+  form at the requested URL without redirecting is captured as is.
 - Every MCP call launches a fresh Chromium, which adds about a second.
 
 ## License

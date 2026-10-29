@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.4.0
+
+Authenticated captures: screenshot logged-in pages without a hand-written
+"sign in, then screenshot" script.
+
+### Added
+
+- `rpc login <url>` opens a browser window; sign in, press Enter (or close
+  the window) and the storage state is saved for that origin to
+  `~/.config/rpc-agent/sessions/<origin>.json` (file 0600, directory 0700).
+  `--save <file>` writes it elsewhere.
+- `rpc login <url> --form`: headless email + password sign-in for CI and
+  agents, from `RPC_LOGIN_EMAIL` / `RPC_LOGIN_PASSWORD` (or `--email` /
+  `--password`), with `--email-selector`, `--password-selector` and
+  `--submit-selector`.
+- `rpc shot` uses the saved session for the target origin automatically.
+  `--no-session` opts out. `rpc sessions [list]` and
+  `rpc sessions clear [origin]` manage them.
+- `rpc shot --cookie "name=value[; Domain=…; Path=…]"`, `--header
+  "Name: value"` (both repeatable), `--storage-state <file>` and
+  `--allow-origin <origin>`.
+- A capture redirected to a login page (`/login`, `/sign-in`, `/auth`, …)
+  fails with code `AUTH_REQUIRED` and the hint ``Session missing or
+  expired: run `rpc login <origin>` `` instead of screenshotting the sign-in
+  form. Sessions whose cookies have all expired aren't loaded.
+- MCP `screenshot` takes `cookies`, `headers`, `storageState`, `useSession`
+  and `allowOrigins`. New `list_sessions` tool.
+- `rpc install --headed` also downloads full Chromium, for the
+  `rpc login` window. Without it, `rpc login` uses an installed Google
+  Chrome if there is one.
+
+### Security
+
+- Headers and cookies go to the target origin only (plus any
+  `--allow-origin`). Headers are injected per request through the CDP Fetch
+  domain, so a redirect to another host doesn't carry them. Saved sessions
+  and storage-state files load only the target origin's cookies and
+  localStorage.
+- Cookie, header and localStorage values are never printed: output shows
+  names with `•••`, and console errors and failure messages are scrubbed.
+- `--password` prints a warning; use the environment variable.
+
+### Changed
+
+- A page that redirects to a login URL now fails that device with
+  `AUTH_REQUIRED` (exit code 1) even when no auth was given. In 0.3 it
+  screenshotted the sign-in page and reported success.
+
+### Unchanged
+
+- With no auth in play, plain output, `--json` output and MCP results are
+  the 0.3 ones. With auth, they gain an `auth:` line / an `auth` field.
+  Existing MCP params and result fields are unchanged.
+
 ## 0.3.1
 
 Published to npm as `rpc-agent`.

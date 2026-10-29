@@ -6,6 +6,17 @@ import { connect } from 'node:net';
 import { relative } from 'node:path';
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
+import type { LoginCommand } from './args.js';
+import {
+  clearSessions,
+  listSessions,
+  localTime,
+  MASK,
+  resolveAuth,
+  sessionsDir,
+  type AuthSummary,
+  type ResolvedAuth,
+} from './auth.js';
 import { BrowserMissingError, installHint, launchBrowser, type DoctorReport } from './browser.js';
 import { capture, type DeviceShot, type ShotResult } from './capture.js';
 import {
@@ -16,7 +27,7 @@ import {
   type DeviceCategory,
 } from './devices.js';
 import { defaultShotOptions, normalizeUrl, type ShotOptions } from './options.js';
-import { openCommand, openPath } from './term.js';
+import { openCommand, openPath, waitForEnter } from './term.js';
 
 export type Colors = ReturnType<typeof pc.createColors>;
 
@@ -204,7 +215,7 @@ export function printDevices(c: Colors): void {
 // ------------------------------------------------------------------ shot
 
 /** Lines for the "Capture Summary" box. */
-export function summaryLines(o: ShotOptions, c: Colors): string[] {
+export function summaryLines(o: ShotOptions, c: Colors, auth?: AuthSummary): string[] {
   const yes = (b: boolean) => (b ? c.green('yes') : c.dim('no'));
   const rows: [string, string][] = [
     ['devices', formatList(o.devices.map(d => c.cyan(d)))],
@@ -215,9 +226,26 @@ export function summaryLines(o: ShotOptions, c: Colors): string[] {
   if (o.reducedMotion) rows.push(['reduced motion', c.green('yes')]);
   if (o.waitFor) rows.push(['wait for', o.waitFor]);
   if (!o.emulate) rows.push(['emulation', c.yellow('viewport + DPR only')]);
+  if (auth) rows.push(...authRows(auth, c));
   rows.push(['output', `${rel(o.outDir)}/`]);
   const w = Math.max(...rows.map(([k]) => k.length)) + 1;
   return [c.cyan(o.url), ...rows.map(([k, v]) => `  ${c.dim(`${k}:`.padEnd(w))} ${v}`)];
+}
+
+/** Auth rows for the summary box: names only, values masked. */
+export function authRows(a: AuthSummary, c: Colors): [string, string][] {
+  const rows: [string, string][] = [];
+  if (a.session) {
+    const saved = a.session.savedAt ? c.dim(` saved ${localTime(a.session.savedAt)}`) : '';
+    if (a.session.loaded) rows.push(['session', `${c.green(a.session.origin)}${saved}`]);
+    else if (a.session.expired) rows.push(['session', c.yellow(`${a.session.origin} expired, not loaded`)]);
+    else rows.push(['session', c.dim(`${a.session.origin} skipped (--no-session)`)]);
+  }
+  if (a.storageState) rows.push(['storage state', rel(a.storageState)]);
+  if (a.cookies?.length) rows.push(['cookies', formatList(a.cookies.map(x => `${x.name}=${c.dim(MASK)}`))]);
+  if (a.headers) rows.push(['headers', formatList(Object.keys(a.headers).map(h => `${h}: ${c.dim(MASK)}`))]);
+  if (a.allowOrigins?.length) rows.push(['also allowed', formatList(a.allowOrigins)]);
+  return rows;
 }
 
 export interface Timed {
@@ -316,10 +344,11 @@ interface RunOptions {
 }
 
 export async function runShot(options: ShotOptions, run: RunOptions, c: Colors): Promise<number> {
+  const auth: ResolvedAuth = resolveAuth(options.url, options.auth ?? {});
   if (!run.continued) {
     printBanner(c);
     intro(c);
-    p.note(summaryLines(options, c).join('\n'), 'Capture Summary');
+    p.note(summaryLines(options, c, auth.summary).join('\n'), 'Capture Summary');
   }
 
   const s = p.spinner();
@@ -351,6 +380,7 @@ export async function runShot(options: ShotOptions, run: RunOptions, c: Colors):
   try {
     result = await capture(options, {
       browser,
+      auth,
       onDeviceStart: (d: Device) => {
         started = performance.now();
         current = p.spinner();
@@ -500,6 +530,89 @@ export async function runInteractive(c: Colors): Promise<number> {
     return 0;
   }
   return runShot(options, { open: false, continued: true, showCommand: true }, c);
+}
+
+// ------------------------------------------------------------------ login
+
+export async function runLogin(cmd: LoginCommand, c: Colors): Promise<number> {
+  intro(c);
+  const { formLogin, interactiveLogin, HeadedBrowserMissingError } = await import('./login.js');
+  const s = p.spinner();
+  let spinning = false;
+  try {
+    let result;
+    if (cmd.form) {
+      s.start(`Signing in at ${c.cyan(cmd.url)} ${c.dim('(headless, form)')}`);
+      spinning = true;
+      result = await formLogin(cmd, cmd.form);
+      spinning = false;
+      s.stop(`Signed in ${c.dim(`now at ${result.finalUrl}`)}`);
+    } else {
+      s.start('Opening Chromium');
+      spinning = true;
+      const enter = waitForEnter();
+      try {
+        result = await interactiveLogin(cmd, enter.promise, () => {
+          spinning = false;
+          s.stop(`Opened ${c.cyan(cmd.url)}`);
+          p.log.info(`Sign in in the browser window, then press ${c.bold('Enter')} here ${c.dim('(or close the window)')}`);
+        });
+      } finally {
+        enter.stop();
+      }
+    }
+    if (result.stillOnLogin) {
+      p.log.warn(c.yellow(`The page was still on a login URL (${result.finalUrl}). The sign-in may not have finished.`));
+    }
+    p.note(
+      [
+        `${c.dim('origin:')}       ${c.cyan(result.origin)}`,
+        `${c.dim('file:')}         ${rel(result.path)} ${c.dim('(mode 0600)')}`,
+        `${c.dim('cookies:')}      ${result.cookies}`,
+        `${c.dim('localStorage:')} ${result.localStorage} origin(s)`,
+      ].join('\n'),
+      'Saved session'
+    );
+    const next = cmd.save ? `rpc shot <url> --storage-state ${quote(rel(result.path))}` : `rpc shot ${result.origin}/…`;
+    p.outro(`${c.green('Done!')}  ${c.dim(`Next: ${next}`)}`);
+    return 0;
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (spinning) s.error(c.red(err instanceof HeadedBrowserMissingError || err instanceof BrowserMissingError ? 'No browser to open' : 'Sign-in failed'));
+    if (err instanceof HeadedBrowserMissingError || err instanceof BrowserMissingError) {
+      p.note(wrap(msg.replace(/^Fix: /, ''), textWidth()).join('\n'), c.yellow('Fix'));
+    } else {
+      p.log.error(wrap(msg, textWidth()).join('\n'));
+    }
+    p.outro(c.red('No session saved.'));
+    return 1;
+  }
+}
+
+export async function runSessions(action: 'list' | 'clear', origin: string | undefined, c: Colors): Promise<number> {
+  intro(c);
+  if (action === 'clear') {
+    const gone = await clearSessions(origin);
+    if (gone.length === 0) p.log.info(origin ? `No saved session for ${c.cyan(origin)}` : 'No saved sessions');
+    for (const o of gone) p.log.success(`Removed ${c.cyan(o)}`);
+    p.outro(c.dim(`${gone.length} removed`));
+    return 0;
+  }
+  const list = await listSessions();
+  if (list.length === 0) {
+    p.log.info(`No saved sessions in ${c.dim(sessionsDir())}`);
+    p.outro(c.dim('Create one with: rpc login <url>'));
+    return 0;
+  }
+  const when = localTime;
+  const originW = Math.max(...list.map(s => s.origin.length));
+  const lines = list.map(s => {
+    const exp = s.expired ? c.red(`expired ${when(s.expires)}`) : s.expires ? c.dim(`expires ${when(s.expires)}`) : c.dim('no expiry');
+    return `${c.cyan(s.origin.padEnd(originW))}  ${String(s.cookies).padStart(2)} cookie${s.cookies === 1 ? ' ' : 's'}  ${c.dim(`saved ${when(s.savedAt)}`)}  ${exp}`;
+  });
+  p.note(lines.join('\n'), `${list.length} saved session${list.length === 1 ? '' : 's'}`);
+  p.outro(c.dim(sessionsDir()));
+  return 0;
 }
 
 // ------------------------------------------------------------------ doctor
