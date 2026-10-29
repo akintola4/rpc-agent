@@ -20,6 +20,8 @@ Published to npm as `rpc-agent`.
   npx is a cache directory and could pull a different Playwright.
 - `rpc install` run through npx no longer shows Playwright's "install your
   project's dependencies" warning box, which didn't apply.
+- `rpc install` downloads only Chromium's headless shell (`--only-shell`),
+  which is all rpc launches: about 210 MB on disk instead of about 580 MB.
 - Requires Node 20.12 or newer (what `@clack/prompts` needs).
 - Chromium is still never downloaded on install: run `rpc install` once.
 

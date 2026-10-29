@@ -80,14 +80,19 @@ export async function doctor(): Promise<DoctorReport> {
   }
 }
 
-/** Run `playwright install chromium` with this package's Playwright, streaming its output. */
+/**
+ * Run `playwright install --only-shell chromium` with this package's
+ * Playwright, streaming its output. rpc always launches headless, which uses
+ * the headless shell, so the full Chrome for Testing build (about 370 MB on
+ * disk) would never run.
+ */
 export function installChromium(): Promise<number> {
   return new Promise((res, rej) => {
     // Load the CLI through -e with a plain argv[1]. Under npx the real path is
     // in the `_npx` cache, and Playwright then prints a box telling the user
     // to install their project's dependencies, which doesn't apply here.
     const loader = `process.argv.splice(1, 0, 'playwright'); require(${JSON.stringify(playwrightCli())});`;
-    const child = spawn(process.execPath, ['-e', loader, 'install', 'chromium'], { stdio: 'inherit' });
+    const child = spawn(process.execPath, ['-e', loader, 'install', '--only-shell', 'chromium'], { stdio: 'inherit' });
     child.on('error', rej);
     child.on('exit', code => res(code ?? 1));
   });

@@ -18,7 +18,7 @@ Chrome extension. See `NOTICE` for where the artwork comes from.
 Requires Node 20.12 or newer. Run it without installing:
 
 ```sh
-npx rpc-agent install          # first run: download Chromium (about 150 MB)
+npx rpc-agent install          # first run: download headless Chromium (~210 MB on disk)
 npx rpc-agent shot localhost:3000 -d iphone-15,desktop-1440 --bezels
 ```
 
@@ -33,7 +33,9 @@ rpc shot https://example.com --bezels
 
 Chromium is not downloaded when the package installs. `rpc install` (or
 `npx rpc-agent install`) fetches it with rpc's own Playwright version, so
-the browser always matches the one rpc launches. Until you run it, every
+the browser always matches the one rpc launches. It installs only
+Chromium's headless shell (plus Playwright's small ffmpeg), not the full
+Chrome for Testing build, since rpc never opens a visible window. Until you run it, every
 command says Chromium is missing and prints that command, instead of
 failing with Playwright's own error. Browsers go to Playwright's usual
 cache, so other Playwright projects on the same version share them.
