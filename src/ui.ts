@@ -19,6 +19,8 @@ import {
 } from './auth.js';
 import { BrowserMissingError, installHint, launchBrowser, type DoctorReport } from './browser.js';
 import { capture, type DeviceShot, type ShotResult } from './capture.js';
+import { checkExitCode, runCheck as audit, summaryLine, type CheckReport, type DeviceCheck } from './check.js';
+import { countsPhrase, groupFindings, groupLines } from './check-format.js';
 import {
   CATEGORY_ORDER,
   DEVICE_ALIASES,
@@ -26,7 +28,7 @@ import {
   type Device,
   type DeviceCategory,
 } from './devices.js';
-import { defaultShotOptions, normalizeUrl, type ShotOptions } from './options.js';
+import { defaultShotOptions, normalizeUrl, type CheckOptions, type ShotOptions } from './options.js';
 import { openCommand, openPath, waitForEnter } from './term.js';
 
 export type Colors = ReturnType<typeof pc.createColors>;
@@ -425,6 +427,104 @@ export async function runShot(options: ShotOptions, run: RunOptions, c: Colors):
   else if (failed > 0) p.outro(`${c.yellow(`Done, ${failed} failed.`)}  ${c.dim(advice)}`);
   else p.outro(`${c.green('Done!')}  ${c.dim(advice)}`);
   return failed > 0 ? 1 : 0;
+}
+
+// ------------------------------------------------------------------ check
+
+/** Lines for the "Check Summary" box. */
+export function checkSummaryLines(o: CheckOptions, c: Colors, auth?: AuthSummary): string[] {
+  const rows: [string, string][] = [
+    ['devices', formatList(o.devices.map(d => c.cyan(d)))],
+    ['fail on', o.failOn === 'warn' ? c.yellow('errors and warnings') : 'errors'],
+  ];
+  if (o.colorScheme) rows.push(['colour scheme', o.colorScheme]);
+  if (o.waitFor) rows.push(['wait for', o.waitFor]);
+  if (auth) rows.push(...authRows(auth, c));
+  if (o.shots) rows.push(['shots', `${rel(o.outDir)}/`]);
+  const w = Math.max(...rows.map(([k]) => k.length)) + 1;
+  return [c.cyan(o.url), ...rows.map(([k, v]) => `  ${c.dim(`${k}:`.padEnd(w))} ${v}`)];
+}
+
+/** The spinner line once a device is done: status, CLS, time. */
+function checkDeviceLine(d: DeviceCheck, ms: number, label: string, c: Colors): string {
+  if (d.error) return `${label}  ${c.red(d.code ?? 'error')}  ${c.dim(formatMs(ms))}`;
+  const status = d.status == null ? c.dim('--') : d.status >= 400 ? c.red(String(d.status)) : c.green(String(d.status));
+  const cls = d.cls === undefined ? '' : d.cls > 0.25 ? c.red(d.cls.toFixed(3)) : d.cls > 0.1 ? c.yellow(d.cls.toFixed(3)) : c.green(d.cls.toFixed(3));
+  return `${label}  ${status}  ${c.dim('CLS')} ${cls}  ${c.dim(formatMs(ms))}`;
+}
+
+/** One box per check that found something, titled with its counts. */
+export function checkBoxes(report: CheckReport, c: Colors): { title: string; lines: string[] }[] {
+  const all = report.devices.map(d => d.device);
+  return groupFindings(report).map(g => {
+    const counts = countsPhrase(g.findings);
+    const tint = g.findings.some(f => f.severity === 'error') ? c.red : g.findings.some(f => f.severity === 'warn') ? c.yellow : c.cyan;
+    return { title: `${g.title} ${c.dim('·')} ${tint(counts)}`, lines: groupLines(g, all, c, { icons: true, width: textWidth() }) };
+  });
+}
+
+export async function runCheck(options: CheckOptions, c: Colors): Promise<number> {
+  const auth: ResolvedAuth = resolveAuth(options.url, options.auth ?? {});
+  intro(c);
+  p.note(checkSummaryLines(options, c, auth.summary).join('\n'), 'Check Summary');
+
+  const s = p.spinner();
+  s.start('Starting Chromium');
+  let browser;
+  try {
+    browser = await launchBrowser();
+  } catch (err) {
+    if (err instanceof BrowserMissingError) {
+      s.error(c.red("Playwright's Chromium is not installed"));
+      p.note(wrap(installHint().replace(/^Fix: /, ''), textWidth()).join('\n'), c.yellow('Fix'));
+      p.outro(`${c.red('Nothing checked.')}  ${c.dim('Run: rpc install')}`);
+      return 1;
+    }
+    s.error(c.red(`Chromium did not start: ${(err as Error).message.split('\n')[0]}`));
+    p.outro(c.red('Nothing checked.'));
+    return 1;
+  }
+  s.stop(`Chromium ${c.dim(browser.version())}`);
+
+  let current: ReturnType<typeof p.spinner> | undefined;
+  let started = 0;
+  let report: CheckReport;
+  const picked = options.devices.map(id => DEVICES.find(d => d.id === id)).filter((d): d is Device => Boolean(d));
+  const idW = Math.max(0, ...picked.map(d => d.id.length));
+  const vpW = Math.max(0, ...picked.map(d => viewport(d).length));
+  const label = (id: string, vp: string) => `${id.padEnd(idW)}  ${c.dim(vp.padEnd(vpW))}`;
+  try {
+    report = await audit(options, {
+      browser,
+      auth,
+      onDeviceStart: (d: Device) => {
+        started = performance.now();
+        current = p.spinner();
+        current.start(label(d.id, viewport(d)));
+      },
+      onDevice: d => {
+        const line = checkDeviceLine(d, performance.now() - started, label(d.device, viewport({ ...d.viewport, dpr: d.dpr })), c);
+        if (d.error) current?.error(line);
+        else current?.stop(line);
+        current = undefined;
+      },
+    });
+  } catch (err) {
+    current?.error(c.red((err as Error).message));
+    p.outro(c.red('Check failed.'));
+    return 1;
+  } finally {
+    await browser.close().catch(() => {});
+  }
+
+  for (const box of checkBoxes(report, c)) p.note(box.lines.join('\n'), box.title);
+  const code = checkExitCode(report, options.failOn);
+  const line = summaryLine(report.summary);
+  const sum = report.summary;
+  if (sum.errors) p.outro(`${c.red(line)}  ${c.dim('Exit code 1.')}`);
+  else if (sum.warnings) p.outro(`${c.yellow(line)}  ${c.dim(code ? 'Exit code 1 (--fail-on warn).' : 'No errors.')}`);
+  else p.outro(`${c.green(line)}  ${c.dim('Ready to ship.')}`);
+  return code;
 }
 
 // ------------------------------------------------------------------ interactive

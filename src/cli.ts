@@ -5,6 +5,8 @@ import { ArgError, parseCli, USAGE, type LoginCommand } from './args.js';
 import { clearSessions, describeAuth, listSessions, localTime, sessionsDir, type SessionInfo } from './auth.js';
 import { doctor, installChromium, type DoctorReport } from './browser.js';
 import { capture, type DeviceShot } from './capture.js';
+import { checkExitCode, runCheck, summaryLine, type CheckReport } from './check.js';
+import { deviceLine, plainReport } from './check-format.js';
 import { CATEGORY_LABELS, CATEGORY_ORDER, DEVICE_ALIASES, DEVICES } from './devices.js';
 import { currentMode, openPath, waitForEnter } from './term.js';
 
@@ -16,10 +18,13 @@ interface Paint {
 }
 const NO_PAINT: Paint = { ok: s => s, bad: s => s, warn: s => s };
 let paint: Paint = NO_PAINT;
+/** The full palette for check output; identity functions unless FORCE_COLOR. */
+let colours: ReturnType<typeof import('picocolors').createColors>;
 
 async function plainPaint(): Promise<Paint> {
-  if (!currentMode().color) return NO_PAINT;
   const { default: pc } = await import('picocolors');
+  colours = pc.createColors(currentMode().color);
+  if (!currentMode().color) return NO_PAINT;
   const c = pc.createColors(true);
   return { ok: c.green, bad: c.red, warn: c.yellow };
 }
@@ -107,6 +112,24 @@ async function main(argv: string[]): Promise<number> {
       if (cmd.open && result.shots.some(s => !s.error)) openPath(result.outDir);
       return result.shots.some(s => s.error) ? 1 : 0;
     }
+    case 'check': {
+      if (mode.rich) {
+        const { ui, c } = await loadUi();
+        return ui.runCheck(cmd.options, c);
+      }
+      const report = await runCheck(
+        cmd.options,
+        cmd.json
+          ? {}
+          : {
+              onAuth: a => console.log(`auth: ${describeAuth(a)}`),
+              onDevice: d => console.log(deviceLine(d, colours)),
+            }
+      );
+      if (cmd.json) console.log(JSON.stringify(report, null, 2));
+      else printCheck(report);
+      return checkExitCode(report, cmd.options.failOn);
+    }
     case 'login': {
       if (cmd.passwordFromFlag) {
         console.error(`rpc: ${paint.warn('warning:')} --password is visible in shell history and the process list; set RPC_LOGIN_PASSWORD instead`);
@@ -178,6 +201,15 @@ function sessionLine(s: SessionInfo): string {
 function rel(p: string): string {
   const r = relative(process.cwd(), p);
   return r.startsWith('..') ? p : r;
+}
+
+function printCheck(report: CheckReport): void {
+  const body = plainReport(report, colours);
+  if (body) console.log(body);
+  console.log('');
+  const s = report.summary;
+  const line = summaryLine(s);
+  console.log(s.errors ? paint.bad(line) : s.warnings ? paint.warn(line) : paint.ok(line));
 }
 
 function printDoctor(r: DoctorReport): void {

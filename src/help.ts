@@ -37,6 +37,18 @@ const AUTH_OPTIONS: Row[] = [
   ['    --allow-origin <o>', 'also send headers and loaded cookies to this origin, repeatable'],
 ];
 
+const CHECK_OPTIONS: Row[] = [
+  ['-d, --devices <ids>', 'comma-separated device ids or aliases (default: iphone-15-pro,desktop-1440)'],
+  ['    --fail-on <level>', 'error (default) or warn: also exit 1 on warnings'],
+  ['    --shots', 'screenshot the elements behind layout-shift and overflow findings'],
+  ['-o, --out <dir>', 'where --shots writes (default: ./.rpc-shots)'],
+  ['    --wait-for <selector>', 'wait for a CSS selector before checking'],
+  ['    --wait <ms>', 'extra settle delay after the scroll (default: 0)'],
+  ['    --color-scheme <s>', 'light | dark | no-preference'],
+  ['    --timeout <ms>', 'navigation timeout (default: 30000)'],
+  ['    --json', 'print the report as JSON (schema in the README)'],
+];
+
 const LOGIN_OPTIONS: Row[] = [
   ['    --save <file>', 'write the storage state here instead of the per-origin session'],
   ['    --form', 'headless: fill an email + password form (CI, agents)'],
@@ -61,6 +73,19 @@ export const COMMANDS: Record<HelpTopic, CommandHelp> = {
       ['rpc shot localhost:3000 -d pixel --json', 'machine-readable result'],
       ['rpc shot localhost:3000/billing', 'uses the session saved by rpc login'],
       ["rpc shot api.example.com/admin --header 'Authorization: Bearer $TOKEN'", ''],
+    ],
+  },
+  check: {
+    usage: 'rpc check <url> [options]',
+    summary:
+      'Audit one page before launch: meta and social tags, layout shift (CLS), unlabelled controls, web fonts, ' +
+      'mobile viewport bugs and basics (status, mixed content, console errors). Exits 1 when there are errors.',
+    options: [...CHECK_OPTIONS, ...AUTH_OPTIONS],
+    examples: [
+      ['rpc check localhost:3000', 'phone + desktop'],
+      ['rpc check localhost:3000 --fail-on warn --json', 'CI: fail on warnings too'],
+      ['rpc check example.com -d pixel,iphone-se,desktop --shots', 'more devices, element screenshots'],
+      ['rpc check localhost:3000/billing', 'uses the session saved by rpc login'],
     ],
   },
   login: {
@@ -111,13 +136,14 @@ export const COMMANDS: Record<HelpTopic, CommandHelp> = {
   },
   mcp: {
     usage: 'rpc mcp',
-    summary: 'Run the MCP server on stdio (tools: screenshot, list_devices, list_sessions).',
+    summary: 'Run the MCP server on stdio (tools: screenshot, check, list_devices, list_sessions).',
     examples: [['claude mcp add --scope user rpc -- node /abs/path/dist/cli.js mcp', 'add to Claude Code']],
   },
 };
 
 const TOP: Row[] = [
   ['shot <url>', 'capture screenshots'],
+  ['check <url>', 'pre-launch audit: meta, layout shift, labels, fonts, mobile'],
   ['login <url>', 'sign in once; later shots of that origin use the session'],
   ['sessions', 'list or clear saved sessions'],
   ['devices', 'list device ids and aliases'],

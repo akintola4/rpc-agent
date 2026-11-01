@@ -4,6 +4,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { describeAuth, listSessions, resolveAuth, sessionsDir, toOrigin, type AuthOptions, type AuthSummary } from './auth.js';
 import { capture, launchBrowser, type DeviceShot } from './capture.js';
+import { runCheck } from './check.js';
+import { textSummary } from './check-format.js';
 import { renderPreview } from './composite.js';
 import {
   CATEGORY_LABELS,
@@ -20,7 +22,9 @@ import {
   DEFAULT_OUT_DIR,
   DEFAULT_SLICE_WIDTH,
   DEFAULT_TIMEOUT_MS,
+  defaultCheckOptions,
   normalizeUrl,
+  type CheckOptions,
   type ShotOptions,
 } from './options.js';
 import { DEFAULT_MAX_HEIGHT } from './slices.js';
@@ -89,6 +93,9 @@ const screenshotInput = {
     .boolean()
     .optional()
     .describe('Return JPEG previews inline: one per device, or the full-page slices when fullPage. Default true.'),
+};
+
+const authInput = {
   cookies: z
     .array(
       z.object({
@@ -122,6 +129,48 @@ const screenshotInput = {
     .describe('Extra origins (e.g. an API host) that also get the headers and loaded cookies.'),
 };
 
+const checkInput = {
+  url: z
+    .string()
+    .describe('Page to audit. http(s)://, file://, a bare host like localhost:3000, or a path to a local .html file.'),
+  devices: z
+    .array(z.string())
+    .min(1)
+    .max(8)
+    .optional()
+    .describe(
+      `Device ids or aliases (see list_devices). Default: ${DEFAULT_DEVICES.join(', ')}. ` +
+        'The mobile viewport checks (100vh, sideways scroll, tap targets, input zoom) run on phones only.'
+    ),
+  shots: z
+    .boolean()
+    .optional()
+    .describe('Save PNGs of the elements behind layout-shift and horizontal-overflow findings (paths in the report). Default false.'),
+  outDir: z.string().optional().describe(`Where shots go, relative to the server's cwd. Default ${DEFAULT_OUT_DIR}.`),
+  waitFor: z.string().optional().describe('CSS selector to wait for (visible) before checking.'),
+  waitMs: z.number().int().min(0).max(30_000).optional().describe('Extra settle delay after the scroll, in ms.'),
+  colorScheme: z.enum(COLOR_SCHEMES as [string, ...string[]]).optional().describe('Emulate prefers-color-scheme.'),
+  timeoutMs: z.number().int().min(1000).max(120_000).optional().describe(`Navigation timeout. Default ${DEFAULT_TIMEOUT_MS}.`),
+};
+
+type AuthArgs = {
+  cookies?: { name: string; value: string; domain?: string | undefined; path?: string | undefined }[] | undefined;
+  headers?: Record<string, string> | undefined;
+  storageState?: string | undefined;
+  useSession?: boolean | undefined;
+  allowOrigins?: string[] | undefined;
+};
+
+function authFrom(args: AuthArgs): AuthOptions {
+  const auth: AuthOptions = {};
+  if (args.cookies?.length) auth.cookies = args.cookies;
+  if (args.headers && Object.keys(args.headers).length) auth.headers = args.headers;
+  if (args.storageState) auth.storageState = args.storageState;
+  if (args.useSession === false) auth.useSession = false;
+  if (args.allowOrigins?.length) auth.allowOrigins = args.allowOrigins.map(toOrigin);
+  return auth;
+}
+
 export function createServer(): McpServer {
   const server = new McpServer({ name: 'rpc', version: pkg.version });
 
@@ -133,18 +182,13 @@ export function createServer(): McpServer {
         'Load a URL in headless Chromium at one or more device viewports (with device pixel ratio, mobile user agent and touch) ' +
         'and save PNG screenshots, optionally framed in a device bezel. Use it to check responsive layout of a page you are building, ' +
         'including local dev servers. Returns file paths, page title, HTTP status and console errors, plus inline previews.',
-      inputSchema: screenshotInput,
+      inputSchema: { ...screenshotInput, ...authInput },
       annotations: { readOnlyHint: false, openWorldHint: true },
     },
     async args => {
       let options: ShotOptions;
       try {
-        const auth: AuthOptions = {};
-        if (args.cookies?.length) auth.cookies = args.cookies;
-        if (args.headers && Object.keys(args.headers).length) auth.headers = args.headers;
-        if (args.storageState) auth.storageState = args.storageState;
-        if (args.useSession === false) auth.useSession = false;
-        if (args.allowOrigins?.length) auth.allowOrigins = args.allowOrigins.map(toOrigin);
+        const auth = authFrom(args);
         options = {
           url: normalizeUrl(args.url),
           devices: resolveDevices(args.devices ?? DEFAULT_DEVICES).map(d => d.id),
@@ -213,10 +257,62 @@ export function createServer(): McpServer {
   );
 
   server.registerTool(
+    'check',
+    {
+      title: 'Pre-launch check of a page',
+      description:
+        'Audit one URL before calling the work done: meta and social tags (title, description, canonical, lang, viewport zoom, ' +
+        'favicon, Open Graph, twitter:card, and whether og:image loads and its size), layout shift (CLS with the elements that moved), ' +
+        'buttons/links/images/fields without an accessible name, web fonts (font-display, preloads), mobile viewport bugs on phones ' +
+        '(100vh, sideways scroll, tap targets under 44px, inputs under 16px) and basics (HTTP status, mixed content, console errors). ' +
+        'Returns a short summary, then the JSON report: each finding has id, severity (error|warn|info), message, selector or url, ' +
+        'devices and a fix. Fix the errors (and ideally warnings), then run it again.',
+      inputSchema: { ...checkInput, ...authInput },
+      annotations: { readOnlyHint: false, openWorldHint: true },
+    },
+    async args => {
+      let options: CheckOptions;
+      try {
+        const auth = authFrom(args);
+        options = {
+          ...defaultCheckOptions(args.url),
+          devices: resolveDevices(args.devices ?? DEFAULT_DEVICES).map(d => d.id),
+          outDir: args.outDir ?? DEFAULT_OUT_DIR,
+          waitFor: args.waitFor,
+          waitMs: args.waitMs ?? 0,
+          colorScheme: args.colorScheme as CheckOptions['colorScheme'],
+          timeoutMs: args.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+          shots: args.shots ?? false,
+          ...(Object.keys(auth).length ? { auth } : {}),
+        };
+        resolveAuth(options.url, auth);
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: (err as Error).message }] };
+      }
+      let browser: Awaited<ReturnType<typeof launchBrowser>>;
+      try {
+        browser = await launchBrowser();
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: `Could not start the browser: ${(err as Error).message}` }] };
+      }
+      try {
+        const report = await runCheck(options, { browser });
+        const content: Content[] = [
+          { type: 'text', text: (report.auth ? `auth: ${describeAuth(report.auth)}\n` : '') + textSummary(report) },
+          { type: 'text', text: JSON.stringify(report, null, 2) },
+        ];
+        return report.devices.every(d => d.error) ? { isError: true, content } : { content };
+      } finally {
+        await browser.close();
+      }
+    }
+  );
+
+  server.registerTool(
     'list_devices',
     {
       title: 'List device presets',
-      description: 'List device ids, CSS viewport sizes and pixel ratios usable in screenshot.devices, plus short aliases.',
+      description: 'List device ids, CSS viewport sizes and pixel ratios usable in screenshot.devices and check.devices, plus short aliases.',
       inputSchema: {
         category: z
           .enum(CATEGORY_ORDER as [DeviceCategory, ...DeviceCategory[]])
