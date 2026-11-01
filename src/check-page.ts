@@ -297,20 +297,35 @@ export const MOBILE_JS = `(() => {
     }
   }
 
-  // Tap targets under 44x44 CSS px. Links inside running text are exempt.
+  // Tap targets under 44x44 CSS px. Inline links in a sentence are exempt
+  // (WCAG 2.5.8): display inline, with letters or digits outside any control
+  // in the same block of text. Buttons and links laid out as boxes count.
   const interactive = 'a[href], button, input:not([type="hidden"]), select, textarea, summary, [role="button"], [role="link"], [role="checkbox"], [role="switch"], [role="tab"], [role="menuitem"]';
+  const blockOf = node => {
+    let p = node.parentElement;
+    while (p && p !== document.body && ['inline', 'contents'].includes(getComputedStyle(p).display)) p = p.parentElement;
+    return p;
+  };
+  const inSentence = el => {
+    const isLink = (el.localName === 'a' && !el.hasAttribute('role')) || el.getAttribute('role') === 'link';
+    if (!isLink || getComputedStyle(el).display !== 'inline') return false;
+    const block = blockOf(el);
+    if (!block) return false;
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (!/[\\p{L}\\p{N}]/u.test(n.textContent)) continue;
+      if (n.parentElement.closest(interactive) || blockOf(n) !== block) continue;
+      return true;
+    }
+    return false;
+  };
   const small = [];
   let tapTargets = 0;
   for (const el of document.querySelectorAll(interactive)) {
     if (!painted(el) || el.closest('[aria-hidden="true"], [inert]')) continue;
     const outerTarget = el.parentElement && el.parentElement.closest(interactive);
     if (outerTarget) continue;
-    const cs = getComputedStyle(el);
-    if (cs.display === 'inline' && el.parentElement) {
-      const own = clean(el.textContent).length;
-      const around = clean(el.parentElement.textContent).length;
-      if (around > own + 10) continue;
-    }
+    if (inSentence(el)) continue;
     tapTargets++;
     let { width, height } = el.getBoundingClientRect();
     if (el.labels) for (const l of el.labels) {

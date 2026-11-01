@@ -11,6 +11,7 @@ import { capture, launchBrowser, type DeviceShot } from '../src/capture.js';
 import { createServer as createMcpServer } from '../src/mcp.js';
 import { defaultShotOptions } from '../src/options.js';
 import { decodePng, pngSize } from '../src/png.js';
+import { failFast } from './serve.js';
 
 // Layout of test/fixtures/tall.html, in CSS px.
 const HEADER = 56;
@@ -46,11 +47,12 @@ let browser: Browser;
 let phone: DeviceShot;
 
 beforeAll(async () => {
-  server = createServer(async (req, res) => {
+  server = createServer(failFast(async (req, res) => {
     const file = join(FIXTURES, req.url === '/' ? 'tall.html' : req.url!.slice(1));
     if (!file.startsWith(FIXTURES) || !existsSync(file)) return void res.writeHead(404).end();
-    res.writeHead(200, { 'content-type': 'text/html' }).end(await readFile(file));
-  });
+    const body = await readFile(file);
+    res.writeHead(200, { 'content-type': 'text/html' }).end(body);
+  }));
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   browser = await launchBrowser();
