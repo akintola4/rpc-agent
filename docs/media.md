@@ -22,6 +22,7 @@ frames go to `.media-cache/` (gitignored); only the final files are committed.
 | `hero-light.png`, `hero-dark.png` | iPhone 15, iPad Air 11" and Desktop 1440 framed shots side by side, transparent background, 1920 px wide (2x). The README picks one with `<picture>` and `prefers-color-scheme`. |
 | `demo.gif` | 16.6 s loop, 1056x660, 20 fps: `rpc` run with no arguments in a terminal (banner, prompts, spinners, Results table, `Captured 3 devices`, `Done!`), then the three framed shots it wrote. |
 | `terminal-shot.png`, `terminal-error.png` | `rpc shot` in an interactive terminal (0.3), for a working site and for a host that doesn't resolve. Not built by `pnpm media`; see below. |
+| `terminal-check.png` | `rpc check https://turbo-start-paystack.vercel.app` in an interactive terminal (0.5). Not built by `pnpm media`; see below. |
 | `mcp-slices-light.png`, `mcp-slices-dark.png` | The first five labelled review slices the MCP `screenshot` tool returns for a full page. |
 
 ## Approach
@@ -146,3 +147,7 @@ turned into coloured HTML and screenshotted with Playwright at 2x. The
 block-letter banner is left out there, because those screenshots draw the
 box-drawing and block glyphs as text, which leaves gaps between rows. The
 GIF's cell masks don't have that problem.
+
+`terminal-check.png` was made the same way in 0.5, except that the run went
+through `scripts/media/pty_bridge.py` (100 columns) and was replayed through
+`@xterm/headless` instead of `pyte`.

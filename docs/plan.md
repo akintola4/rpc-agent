@@ -328,3 +328,47 @@ contain no escape codes; argument parsing accepts every 0.2 flag plus
 `--open` and per-command `--help`. The real TTY experience is checked by
 running the built CLI in a pseudo-terminal, and `pnpm smoke:mcp` proves the
 MCP server is unaffected.
+
+## v0.5 Ship-check
+
+`rpc check <url>` audits one page before launch and reports findings
+(id, severity, message, selector or URL, devices, fix). Same browser, device
+list, auth and URL handling as `rpc shot`; default devices
+`iphone-15-pro,desktop-1440`. Exit 1 on any error (`--fail-on warn` also
+fails on warnings). `--json` prints a versioned report; MCP gets a `check`
+tool with the screenshot tool's auth params.
+
+**Per device.** A fresh context (shared with capture), a `layout-shift`
+PerformanceObserver installed by an init script, then load, settle
+(network idle, fonts, images), a fixed 500 ms idle, one scroll down a
+viewport and back with 300 ms pauses, and the in-page checks. Page-level
+findings that come out the same on several devices are merged.
+
+**How each check measures.**
+
+- Meta and social: DOM reads of title, description, canonical, `lang`,
+  viewport (`user-scalable=no`, `maximum-scale` under 2), icon links (and
+  `/favicon.ico` when there are none), `og:*`, `twitter:card`,
+  `theme-color`. `og:image` is fetched through the context's request API;
+  status, content type and pixel size (PNG, JPEG, GIF, WebP headers).
+- Layout shift: CLS from the observer's entries with Google's session
+  windows (1 s gap, 5 s cap), input-driven shifts excluded, totals under
+  0.001 treated as zero. Sources are attributed by their rect area; top 3
+  reported. 0.1 warn, 0.25 error.
+- Unlabelled controls: in-page accessible-name computation (labelledby,
+  aria-label, labels, alt, subtree text, svg title, title) for buttons,
+  links and `[role=button]`; `img` without `alt`; form fields without a
+  label (placeholder-only is a warning).
+- Fonts: `font` responses, `@font-face` rules from the CSSOM (cross-origin
+  sheets fetched and parsed as text), families used by text in the first
+  viewport, `link[rel=preload][as=font]` with `crossorigin`.
+- Mobile (phone devices only): `100vh` in height properties of matched
+  rules and inline styles on rendered elements; `scrollWidth > innerWidth`
+  with the outermost overflowing elements; tap targets under 44x44 (inline
+  links in text exempt); text fields under 16px.
+- Basics: final HTTP status, `http:` requests or Mixed Content console
+  messages on an https page, uncaught exceptions and `console.error`.
+
+**Tests.** Fixtures served by a local http server, one per check plus a
+clean page that must produce no errors or warnings; CLS on a fixture with a
+known shift lands in a fixed range across runs.
