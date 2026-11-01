@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Layout shift fixture</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  #banner { height: 300px; background: #fc0; }
+  #content { height: 3000px; background: linear-gradient(#eef, #ccd); }
+</style>
+</head>
+<body>
+<div id="content">Content that a late banner pushes down by 300px.</div>
+<script>
+  // One deterministic shift: 800 ms after load (past Chrome's 500 ms window in
+  // which shifts count as input-driven), a 300px banner lands above everything.
+  addEventListener('load', () => setTimeout(() => {
+    const b = document.createElement('div');
+    b.id = 'banner';
+    document.body.prepend(b);
+  }, 800));
+</script>
+</body>
+</html>

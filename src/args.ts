@@ -5,14 +5,19 @@ import type { FormLogin } from './login.js';
 import {
   COLOR_SCHEMES,
   DEFAULT_TIMEOUT_MS,
+  defaultCheckOptions,
   defaultShotOptions,
+  FAIL_ON,
   normalizeUrl,
+  type CheckOptions,
   type ColorScheme,
+  type FailOn,
   type ShotOptions,
 } from './options.js';
 
 export type Command =
   | { command: 'shot'; options: ShotOptions; json: boolean; open: boolean }
+  | { command: 'check'; options: CheckOptions; json: boolean }
   | { command: 'devices'; json: boolean }
   | { command: 'mcp' }
   | { command: 'doctor'; json: boolean }
@@ -35,7 +40,7 @@ export interface LoginCommand {
   json: boolean;
 }
 
-export const HELP_TOPICS = ['shot', 'login', 'sessions', 'devices', 'doctor', 'install', 'mcp'] as const;
+export const HELP_TOPICS = ['shot', 'check', 'login', 'sessions', 'devices', 'doctor', 'install', 'mcp'] as const;
 export type HelpTopic = (typeof HELP_TOPICS)[number];
 
 function isTopic(s: string | undefined): s is HelpTopic {
@@ -54,6 +59,7 @@ export const USAGE = `rpc - screenshot a URL at device viewports, optionally in 
 
 Usage:
   rpc shot <url> [options]   capture screenshots
+  rpc check <url> [options]  pre-launch audit: meta, layout shift, labels, fonts, mobile
   rpc login <url> [--form]   sign in once and save the session for that origin
   rpc sessions [list|clear [origin]]
                              list or delete saved sessions
@@ -81,7 +87,12 @@ Shot options:
       --json                 print the result as JSON
       --open                 open the output folder when done
 
-Auth options (values are never printed):
+Check options (plus -d, --wait-for, --wait, --timeout, --color-scheme, -o, --json):
+      --fail-on <level>      error (default) | warn: exit 1 on warnings too
+      --shots                screenshot the elements behind layout-shift and
+                             overflow findings (into --out)
+
+Auth options (values are never printed, shot and check):
       --cookie <c>           "name=value[; Domain=…; Path=…]", repeatable;
                              sent to the target origin only
       --header <h>           "Name: value", repeatable; target origin only
@@ -96,6 +107,7 @@ Examples:
   rpc shot localhost:3000 -d iphone-15,ipad,desktop-1440 --bezels
   rpc shot https://example.com --full-page --color-scheme dark
   rpc login localhost:3000/sign-in && rpc shot localhost:3000/dashboard
+  rpc check localhost:3000 --fail-on warn
 `;
 
 export function parseCli(argv: readonly string[], env: NodeJS.ProcessEnv = process.env): Command {
@@ -137,6 +149,8 @@ export function parseCli(argv: readonly string[], env: NodeJS.ProcessEnv = proce
     }
     case 'shot':
       return parseShot(rest);
+    case 'check':
+      return parseCheck(rest);
     default:
       throw new ArgError(`Unknown command "${cmd}". Run \`rpc --help\`.`);
   }
@@ -162,11 +176,7 @@ function parseShot(args: string[]): Command {
       'reduced-motion': { type: 'boolean' },
       json: { type: 'boolean' },
       open: { type: 'boolean' },
-      cookie: { type: 'string', multiple: true },
-      header: { type: 'string', multiple: true },
-      'storage-state': { type: 'string' },
-      'no-session': { type: 'boolean' },
-      'allow-origin': { type: 'string', multiple: true },
+      ...AUTH_FLAGS,
     },
     true
   );
@@ -181,28 +191,14 @@ function parseShot(args: string[]): Command {
     throw new ArgError((err as Error).message);
   }
 
-  if (typeof values.devices === 'string') {
-    const list = splitList(values.devices);
-    if (list.length === 0) throw new ArgError('--devices is empty');
-    try {
-      options.devices = resolveDevices(list).map(d => d.id);
-    } catch (err) {
-      throw new ArgError((err as Error).message);
-    }
-  }
+  if (typeof values.devices === 'string') options.devices = parseDevices(values.devices);
   if (values.bezels) options.bezels = true;
   if (values['full-page']) options.fullPage = true;
   if (typeof values.out === 'string') options.outDir = values.out;
   if (typeof values['wait-for'] === 'string') options.waitFor = values['wait-for'];
   if (typeof values.wait === 'string') options.waitMs = parseMs('--wait', values.wait);
   if (typeof values.timeout === 'string') options.timeoutMs = parseMs('--timeout', values.timeout);
-  if (typeof values['color-scheme'] === 'string') {
-    const s = values['color-scheme'];
-    if (!COLOR_SCHEMES.includes(s as ColorScheme)) {
-      throw new ArgError(`--color-scheme must be one of ${COLOR_SCHEMES.join(', ')}`);
-    }
-    options.colorScheme = s as ColorScheme;
-  }
+  if (typeof values['color-scheme'] === 'string') options.colorScheme = parseColorScheme(values['color-scheme']);
   if (values['no-emulate']) options.emulate = false;
   if (values.slices) options.saveSlices = true;
   if (values['reduced-motion']) options.reducedMotion = true;
@@ -213,6 +209,30 @@ function parseShot(args: string[]): Command {
     options.maxHeight = parseInt_('--max-height', values['max-height'], 500, 200_000);
   }
 
+  const auth = parseAuth(values, options.url);
+  if (auth) options.auth = auth;
+
+  return { command: 'shot', options, json: Boolean(values.json), open: Boolean(values.open) };
+}
+
+const AUTH_FLAGS = {
+  cookie: { type: 'string', multiple: true },
+  header: { type: 'string', multiple: true },
+  'storage-state': { type: 'string' },
+  'no-session': { type: 'boolean' },
+  'allow-origin': { type: 'string', multiple: true },
+} as const;
+
+interface AuthValues {
+  cookie?: string[] | undefined;
+  header?: string[] | undefined;
+  'storage-state'?: string | undefined;
+  'no-session'?: boolean | undefined;
+  'allow-origin'?: string[] | undefined;
+}
+
+/** Cookie/header/session flags, validated against the URL now: bad input is a usage error. */
+function parseAuth(values: AuthValues, url: string): AuthOptions | undefined {
   const auth: AuthOptions = {};
   try {
     if (values.cookie?.length) auth.cookies = values.cookie.map(parseCookie);
@@ -220,15 +240,70 @@ function parseShot(args: string[]): Command {
     if (typeof values['storage-state'] === 'string') auth.storageState = values['storage-state'];
     if (values['no-session']) auth.useSession = false;
     if (values['allow-origin']?.length) auth.allowOrigins = values['allow-origin'].flatMap(splitList).map(toOrigin);
-    if (Object.keys(auth).length) {
-      resolveAuth(options.url, auth); // validate now: bad input is a usage error
-      options.auth = auth;
-    }
+    if (!Object.keys(auth).length) return undefined;
+    resolveAuth(url, auth);
+    return auth;
   } catch (err) {
     throw new ArgError((err as Error).message);
   }
+}
 
-  return { command: 'shot', options, json: Boolean(values.json), open: Boolean(values.open) };
+function parseDevices(raw: string): string[] {
+  const list = splitList(raw);
+  if (list.length === 0) throw new ArgError('--devices is empty');
+  try {
+    return resolveDevices(list).map(d => d.id);
+  } catch (err) {
+    throw new ArgError((err as Error).message);
+  }
+}
+
+function parseCheck(args: string[]): Command {
+  if (wantsHelp(args)) return { command: 'help', topic: 'check' };
+  const { values, positionals } = parse(
+    args,
+    {
+      devices: { type: 'string', short: 'd' },
+      out: { type: 'string', short: 'o' },
+      'wait-for': { type: 'string' },
+      wait: { type: 'string' },
+      'color-scheme': { type: 'string' },
+      timeout: { type: 'string' },
+      'fail-on': { type: 'string' },
+      shots: { type: 'boolean' },
+      json: { type: 'boolean' },
+      ...AUTH_FLAGS,
+    },
+    true
+  );
+  if (positionals.length === 0) throw new ArgError('Missing <url>. Usage: rpc check <url> [options]');
+  if (positionals.length > 1) throw new ArgError(`Expected one URL, got: ${positionals.join(' ')}`);
+
+  let options: CheckOptions;
+  try {
+    options = defaultCheckOptions(positionals[0]!);
+  } catch (err) {
+    throw new ArgError((err as Error).message);
+  }
+  if (typeof values.devices === 'string') options.devices = parseDevices(values.devices);
+  if (typeof values.out === 'string') options.outDir = values.out;
+  if (typeof values['wait-for'] === 'string') options.waitFor = values['wait-for'];
+  if (typeof values.wait === 'string') options.waitMs = parseMs('--wait', values.wait);
+  if (typeof values.timeout === 'string') options.timeoutMs = parseMs('--timeout', values.timeout);
+  if (typeof values['color-scheme'] === 'string') options.colorScheme = parseColorScheme(values['color-scheme']);
+  if (typeof values['fail-on'] === 'string') {
+    if (!FAIL_ON.includes(values['fail-on'] as FailOn)) throw new ArgError(`--fail-on must be one of ${FAIL_ON.join(', ')}`);
+    options.failOn = values['fail-on'] as FailOn;
+  }
+  if (values.shots) options.shots = true;
+  const auth = parseAuth(values, options.url);
+  if (auth) options.auth = auth;
+  return { command: 'check', options, json: Boolean(values.json) };
+}
+
+function parseColorScheme(s: string): ColorScheme {
+  if (!COLOR_SCHEMES.includes(s as ColorScheme)) throw new ArgError(`--color-scheme must be one of ${COLOR_SCHEMES.join(', ')}`);
+  return s as ColorScheme;
 }
 
 function parseLogin(args: string[], env: NodeJS.ProcessEnv): Command {

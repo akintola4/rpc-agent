@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unlabelled controls fixture</title>
+<style>body { margin: 0; font: 16px sans-serif; } .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }</style>
+</head>
+<body>
+<!-- Flagged -->
+<button class="icon-menu"><svg width="24" height="24"><path d="M0 0h24v24H0z"/></svg></button>
+<a href="/cart" class="cart-link"><svg width="24" height="24"><circle cx="12" cy="12" r="10"/></svg></a>
+<div role="button" class="fake-btn" tabindex="0"></div>
+<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" class="no-alt" width="10" height="10">
+<input type="text" name="q" class="bare">
+<input type="email" placeholder="Email" class="placeholder-only">
+
+<!-- Not flagged -->
+<button aria-label="Close"><svg width="24" height="24" aria-hidden="true"><path d="M0 0h24v24H0z"/></svg></button>
+<button><svg width="24" height="24"><title>Search</title><path d="M0 0h24v24H0z"/></svg></button>
+<button><span class="sr-only">Settings</span><svg width="24" height="24" aria-hidden="true"></svg></button>
+<a href="/home"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="Home" width="10" height="10"></a>
+<button aria-labelledby="lbl"></button><span id="lbl">Labelled by</span>
+<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" width="10" height="10">
+<label>Name <input type="text" name="name"></label>
+<label for="phone">Phone</label><input id="phone" type="tel">
+<input type="text" aria-label="Coupon">
+<div aria-hidden="true"><button></button></div>
+<button style="display:none"></button>
+</body>
+</html>

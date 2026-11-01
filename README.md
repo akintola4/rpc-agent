@@ -63,6 +63,7 @@ these docs say `rpc`, or `pnpm rpc` from inside the repo.
 ```sh
 rpc                    # interactive: pick a URL, devices and options
 rpc shot <url> [options]
+rpc check <url> [options]  # pre-launch audit, see Ship-check below
 rpc login <url> [--form]   # sign in once; later shots of that origin use the session
 rpc sessions [list|clear [origin]]
 rpc devices [--json]
@@ -299,9 +300,231 @@ rpc shot localhost:3000/app --storage-state auth.json
 - **Use a test account.** Sign in as a user whose data you're happy for
   screenshots (and the agent reading them) to see.
 
+## Ship-check
+
+`rpc check <url>` audits one page before you call it done. It loads the page
+on a phone and a desktop width, the way `rpc shot` does, and lists what's
+wrong: missing or broken social tags, layout shift, buttons a screen reader
+can't name, fonts that hide text while they load, and the mobile viewport
+bugs that only show up on a phone.
+
+```sh
+rpc check localhost:3000
+rpc check localhost:3000 --fail-on warn --json     # CI
+rpc check example.com/pricing -d pixel,iphone-se,desktop --shots
+```
+
+<img alt="rpc check in a terminal on turbo-start-paystack.vercel.app: both devices load with HTTP 200 and CLS 0.000, then a Meta and social box (no canonical link, no og:url) and a Mobile viewport box (16 of 54 tap targets under 44x44 px, with selectors and sizes), each finding with a fix, and the line 0 errors, 3 warnings, 0 info" src="https://raw.githubusercontent.com/akintola4/rpc-agent/main/docs/media/terminal-check.png" width="720">
+
+URLs, devices and auth work as in `rpc shot`: `localhost:3000` needs no
+scheme, `-d` takes ids or aliases (default `iphone-15-pro,desktop-1440`),
+and `--cookie`, `--header`, `--storage-state` and the session saved by
+`rpc login` all apply. A page that redirects to a login URL fails with
+`AUTH_REQUIRED`. Each run checks one URL. It isn't Lighthouse: CLS is the
+only performance number it reports.
+
+| Option | Meaning |
+| --- | --- |
+| `-d, --devices <ids>` | Devices to check on. The mobile checks run on phones only |
+| `--fail-on <level>` | `error` (default) exits 1 on errors; `warn` exits 1 on warnings too |
+| `--shots` | Save PNGs of the elements behind layout-shift and overflow findings into `--out` |
+| `-o, --out <dir>` | Where `--shots` writes. Default `./.rpc-shots` |
+| `--json` | Print the report as JSON (see below) |
+| `--wait-for`, `--wait`, `--timeout`, `--color-scheme` | As in `rpc shot` |
+| `--cookie`, `--header`, `--storage-state`, `--no-session`, `--allow-origin` | As in `rpc shot` |
+
+The exit code is 0 when there are no errors (with `--fail-on warn`, no
+warnings either), 1 otherwise and 2 for a usage error.
+
+### How a check runs
+
+Each device gets a fresh browser context, the same one `rpc shot` uses.
+Before the page's own scripts run, rpc installs a `PerformanceObserver` for
+`layout-shift`. It loads the page and waits for network idle (up to 10 s),
+web fonts and pending images. Then it waits a fixed 500 ms, scrolls down one
+viewport and back with a 300 ms pause each way, and reads the page. Because
+the sequence is fixed, CLS comes out the same on every run; the tests check
+the same page twice and allow 0.005 of difference.
+
+When a finding is identical on several devices it's reported once, with
+every device listed, so a missing `lang` appears one time, not two.
+
+### What it checks
+
+Severity decides the exit code. `error` fails the run, `warn` fails it only
+with `--fail-on warn`, and `info` never does.
+
+#### Basics
+
+| id | Severity | When | Fix |
+| --- | --- | --- | --- |
+| `http-status` | error | The page answered 400 or above | Serve it with a 200 |
+| `page-load-failed`, `auth-required` | error | The page didn't load on a device (DNS, refused, timeout) or landed on a login page | The error's own hint, e.g. ``run `rpc login <origin>` `` |
+| `mixed-content` | error (warn if the browser upgraded every request) | `http://` requests on an https page | Load everything over https |
+| `uncaught-exception` | error | Exceptions thrown during load, first three listed | Fix the first one; the rest often follow from it |
+| `console-errors` | warn | `console.error` during load: the count and the first three | Fix or silence them |
+| `theme-color-missing` | info | No `<meta name="theme-color">` | Add one to tint the mobile browser bar |
+
+#### Meta and social
+
+| id | Severity | When | Fix |
+| --- | --- | --- | --- |
+| `title-missing`, `title-long` | error, warn | No `<title>`, or one over 60 characters | 50 to 60 characters, key words first |
+| `description-missing`, `description-long` | warn, info | No meta description, or one over 160 characters | One or two sentences |
+| `canonical-missing` | warn | No `<link rel="canonical">` | The absolute URL to index |
+| `lang-missing` | error | No `lang` on `<html>` | `<html lang="en">` |
+| `viewport-missing`, `viewport-no-zoom` | error | No viewport meta, or one with `user-scalable=no` or `maximum-scale` under 2 | `width=device-width, initial-scale=1` and nothing that blocks zoom |
+| `favicon-missing` | warn | No `<link rel="icon">`, and `/favicon.ico` doesn't load | Add an icon link |
+| `apple-touch-icon-missing` | info | No `apple-touch-icon` | A 180x180 PNG |
+| `og-title-missing`, `og-description-missing`, `og-image-missing`, `og-url-missing` | warn | That Open Graph tag is absent | Add it; link previews read it |
+| `twitter-card-missing` | warn | No `twitter:card` | `summary_large_image` |
+| `og-image-relative` | warn | `og:image` isn't an absolute URL | Make it absolute; most scrapers don't resolve relative URLs |
+| `og-image-broken`, `og-image-not-image` | error | `og:image` doesn't return 200, or isn't served as an image | Point it at the image file |
+| `og-image-small`, `og-image-ratio` | warn, info | Smaller than 600x315, or not the 1.91:1 shape of 1200x630 | Export it at 1200x630 |
+
+rpc fetches `og:image` once per run and reads its pixel size from the file
+header (PNG, JPEG, GIF or WebP). The result is in the report's `ogImage`.
+
+#### Layout shift
+
+| id | Severity | When | Fix |
+| --- | --- | --- | --- |
+| `layout-shift` | error above 0.25, warn above 0.1, info above 0 | CLS for the load and the scroll, with the three elements that moved most and each one's share | Reserve space for late content: `width`/`height` or `aspect-ratio` on media, `min-height` on async sections, nothing inserted above what's on screen |
+
+The score is computed the way Chrome computes it: the largest session
+window, meaning shifts less than 1 s apart and at most 5 s in total. Chrome
+marks shifts that follow input as `hadRecentInput`, including any in the
+first 500 ms after navigation, and those don't count. Totals under 0.001
+count as zero. Each device's score is also in `devices[].cls`.
+
+#### Unlabelled controls
+
+| id | Severity | When | Fix |
+| --- | --- | --- | --- |
+| `button-no-name`, `link-no-name` | error | A button, link or `[role=button]` with no accessible name, such as an icon-only button | `aria-label`, visually hidden text, or alt text on the image inside |
+| `img-no-alt` | error | An `<img>` with no `alt` attribute (`alt=""` is fine) | Describe the image, or `alt=""` if it's decorative |
+| `field-no-label` | error | An input, select or textarea with no label | `<label for>`, a wrapping `<label>`, or `aria-label` |
+| `field-placeholder-only` | warn | A field labelled only by its placeholder | Add a visible label |
+
+rpc works out accessible names in the page from `aria-labelledby`,
+`aria-label`, `<label>`, `alt`, the text inside (minus anything
+`aria-hidden`), an SVG `<title>` and `title`. It skips elements assistive
+tech can't reach: `display: none`, `visibility: hidden`, `aria-hidden` and
+`inert`.
+
+#### Fonts
+
+| id | Severity | When | Fix |
+| --- | --- | --- | --- |
+| `font-display-missing`, `font-display-block` | warn | A loaded `@font-face` has no `font-display` (Chrome then hides its text for up to 3 s) or uses `block`. The message says when it sets text above the fold (FOIT) | `font-display: swap` or `optional`; `&display=swap` for Google Fonts |
+| `font-not-preloaded` | warn | A font file that sets text in the first viewport isn't preloaded | `<link rel="preload" as="font" type="font/woff2" crossorigin>` |
+| `font-preload-no-crossorigin` | warn | A font preload without `crossorigin`, so the file downloads twice | Add `crossorigin` |
+| `font-preload-unused` | info | A preloaded font that no `@font-face` uses | Remove it, or match the URL exactly |
+| `font-failed` | error | A font file returned 400 or above | Fix the `src` URL |
+
+Every font finding names the file URL. The `@font-face` rules come from the
+page's stylesheets; the page can't read cross-origin ones (Google Fonts, a
+CDN), so rpc downloads and parses those itself. Faces with only `local()`
+sources, like next/font's size-adjusted fallbacks, never block text and are
+skipped.
+
+#### Mobile viewport
+
+These run on phone devices only.
+
+| id | Severity | When | Fix |
+| --- | --- | --- | --- |
+| `horizontal-overflow` | error | `scrollWidth` is wider than the layout viewport. Lists the outermost elements that stick out, furthest first | `max-width: 100%` on the element, or `overflow-x: auto` on its wrapper |
+| `vh-units` | warn | A rendered element sized with `100vh` in `height`, `min-height` or `max-height`, from a stylesheet rule that applies or an inline style | `100dvh` or `100svh`, with `100vh` before it as a fallback |
+| `tap-target-small` | warn | Links, buttons and form controls smaller than 44x44 CSS px. Links inside running text are exempt | Padding, `min-height`, or a bigger hit area |
+| `input-zoom` | warn | A text field with `font-size` under 16px; iOS Safari zooms the page when it gets focus | `font-size: 16px` or more |
+
+A headless phone has no browser bars, so `100vh` and `100dvh` measure the
+same there. That's why `vh-units` reads the CSS instead of measuring
+elements. The `height: 100vh; height: 100dvh` fallback pattern isn't
+flagged: the browser keeps only the last value it understands.
+
+### JSON report
+
+`--json` prints this object, and the MCP `check` tool returns the same one.
+`schema` goes up only when a field changes meaning or is removed; new fields
+can appear without it.
+
+```jsonc
+{
+  "schema": 1,
+  "url": "https://example.com/",
+  "devices": [
+    {
+      "device": "iphone-15-pro",
+      "name": "iPhone 15 Pro",
+      "viewport": { "width": 393, "height": 852 },
+      "dpr": 3,
+      "mobile": true,              // the phone-only checks ran here
+      "status": 200,
+      "finalUrl": "https://example.com/",
+      "title": "Example",
+      "cls": 0.012,
+      "layoutShifts": 2,
+      // only when the page didn't load on this device:
+      "error": "…", "code": "ERR_NAME_NOT_RESOLVED", "hint": "…"
+    }
+  ],
+  "summary": { "errors": 1, "warnings": 4, "info": 2 },
+  "findings": [
+    {
+      "id": "horizontal-overflow",      // stable; see the tables above
+      "check": "mobile",                // basics | meta | layout-shift | labels | fonts | mobile
+      "severity": "error",              // error | warn | info
+      "message": "The page scrolls sideways: 601px wide in a 393px viewport",
+      "fix": "Find the element that sticks out …",
+      "devices": ["iphone-15-pro"],
+      "selector": "div.pricing-table",  // when one element is the answer
+      "url": "…",                       // when a file is (a font, og:image)
+      "value": 208,                     // the number behind it, if there is one
+      "items": [                        // elements, files or log lines, when there are several
+        {
+          "selector": "div.pricing-table",
+          "text": "600px wide, 207px past the edge",
+          "value": 207,
+          "screenshot": "/abs/.rpc-shots/…-check-horizontal-overflow-1.png"  // with --shots
+        }
+      ]
+    }
+  ],
+  "ogImage": { "url": "…", "status": 200, "contentType": "image/png", "width": 1200, "height": 630 },
+  "auth": { … }                         // as in rpc shot, values masked
+}
+```
+
+Findings are sorted by check, in the order of the tables above, then by
+severity. `id`, `check`, `severity`, `message`, `fix` and `devices` are
+always there; the other fields appear when they apply.
+
+### In CI
+
+```sh
+npx rpc-agent install
+npx rpc-agent check https://staging.example.com --fail-on warn --json > ship-check.json
+```
+
+The exit code fails the job, and the JSON can go into a PR comment or a
+build artifact. For a page behind a login, sign in first with
+`rpc login <url> --form` (see [CI and agents](#ci-and-agents-rpc-login---form)).
+
+### With a coding agent
+
+Add the MCP server (below) and tell the agent to run `check` before it
+reports UI work as finished, for example in `CLAUDE.md` or `AGENTS.md`:
+
+```md
+Before you say UI work is done, run the rpc `check` tool on each page you
+changed and fix every error. Fix the warnings too, or say why one doesn't apply.
+```
+
 ## MCP server
 
-`rpc mcp` runs an MCP server on stdio with three tools.
+`rpc mcp` runs an MCP server on stdio with four tools.
 
 ### `screenshot`
 
@@ -354,6 +577,25 @@ session, cookies and headers (values masked), and the JSON summary gains an
 `auth` field. A capture that lands on a login page fails with
 `AUTH_REQUIRED` and the `rpc login` hint. Signing in is something the user
 does in a terminal (`rpc login`); the agent then just calls `screenshot`.
+
+### `check`
+
+Runs [Ship-check](#ship-check) on one URL.
+
+| Param | Default | |
+| --- | --- | --- |
+| `url` | required | http(s), file, bare host or local path |
+| `devices` | `["iphone-15-pro", "desktop-1440"]` | ids or aliases; the mobile checks run on phones |
+| `shots` | false | save PNGs of the elements behind layout-shift and overflow findings |
+| `outDir`, `waitFor`, `waitMs`, `colorScheme`, `timeoutMs` | | as for `screenshot` |
+| `cookies`, `headers`, `storageState`, `useSession`, `allowOrigins` | | as for `screenshot` |
+
+The result is two text blocks. The first is a short summary: the counts,
+then one line per error and warning with its id and selector, like
+`ERROR [button-no-name] 2 buttons with no accessible name at button.icon-menu`.
+The second is the JSON report described under [JSON report](#json-report).
+The call is a tool error only when the page failed to load on every device;
+findings, even errors, come back as a normal result for the agent to act on.
 
 ### `list_devices`
 
@@ -445,6 +687,13 @@ appear once, that the IntersectionObserver section rendered, and the slice
 count and labels, including through the MCP server. The missing-browser tests
 point `PLAYWRIGHT_BROWSERS_PATH` at an empty temp dir.
 
+The Ship-check tests serve `test/fixtures/check`: one page per check
+(`meta.html`, `shift.html`, `labels.html`, `fonts.html`, `mobile.html`,
+`basics.html`) and `clean.html`, which must produce no errors or warnings.
+`shift.html` inserts a 300 px banner 800 ms after load, so CLS is known in
+advance (300/852 on the phone, 300/1440 on desktop); the test runs it twice
+and compares.
+
 The README media are built from real captures by `scripts/media/build.ts`;
 `docs/media.md` explains how. The CLI's design notes, and what it borrows
 from the `skills` CLI, are in `docs/cli-design.md`.
@@ -466,6 +715,11 @@ from the `skills` CLI, are in `docs/cli-design.md`.
 - Login-page detection goes by the URL path. An app that shows its sign-in
   form at the requested URL without redirecting is captured as is.
 - Every MCP call launches a fresh Chromium, which adds about a second.
+- Ship-check reads `100vh` only from stylesheets the page can read and from
+  inline styles; a `100vh` rule in a cross-origin stylesheet is missed. Tap
+  targets are measured by their box, so a hit area enlarged with a
+  pseudo-element still counts as small. CLS covers the load and one scroll,
+  not shifts caused by clicking around.
 
 ## License
 

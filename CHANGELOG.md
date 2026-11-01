@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.5.0
+
+Ship-check: `rpc check <url>` audits a page before launch, from the CLI, in
+CI or through MCP.
+
+### Added
+
+- `rpc check <url>` runs on a phone and a desktop width by default (`-d`
+  to change) and reports findings with an id, severity (`error`, `warn`,
+  `info`), message, selector or URL, devices and a fix. Checks:
+  - Basics: HTTP status, mixed content, uncaught exceptions, console errors,
+    `theme-color`.
+  - Meta and social: title, description, canonical, `lang`, viewport (and
+    zoom blocking), favicon, apple-touch-icon, `og:title`,
+    `og:description`, `og:image`, `og:url`, `twitter:card`. `og:image` is
+    fetched for its status, content type and pixel size.
+  - Layout shift: CLS (largest session window) after load and one scroll,
+    with the elements that moved. Warn above 0.1, error above 0.25.
+  - Unlabelled controls: buttons, links and `[role=button]` with no
+    accessible name, images without `alt`, form fields without a label.
+  - Fonts: missing or `block` `font-display`, above-the-fold fonts that
+    aren't preloaded, preloads without `crossorigin`, unused preloads,
+    font files that fail.
+  - Mobile viewport (phones): `100vh`, sideways scroll with the elements
+    that cause it, tap targets under 44x44, text fields under 16px.
+- Exit code 1 on errors; `--fail-on warn` fails on warnings too.
+  `--json` prints a versioned report (`schema: 1`, documented in the
+  README). `--shots` saves PNGs of the elements behind layout-shift and
+  overflow findings.
+- Auth works as for `rpc shot`: `--cookie`, `--header`,
+  `--storage-state`, `--allow-origin`, saved `rpc login` sessions and
+  `AUTH_REQUIRED` on a redirect to sign-in.
+- MCP `check` tool with the same options and the `screenshot` tool's auth
+  params. It returns a short text summary and the JSON report.
+
+### Unchanged
+
+- `rpc shot`, its output and the MCP `screenshot` tool. The MCP tool list
+  gains `check`.
+
 ## 0.4.0
 
 Authenticated captures: screenshot logged-in pages without a hand-written

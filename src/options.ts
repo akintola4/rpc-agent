@@ -60,6 +60,41 @@ export function defaultShotOptions(url: string): ShotOptions {
   };
 }
 
+export type FailOn = 'error' | 'warn';
+export const FAIL_ON: readonly FailOn[] = ['error', 'warn'];
+
+/** `rpc check`: the capture options that apply to an audit, plus its own. */
+export interface CheckOptions {
+  url: string;
+  devices: string[];
+  outDir: string;
+  waitFor?: string | undefined;
+  waitMs: number;
+  colorScheme?: ColorScheme | undefined;
+  timeoutMs: number;
+  emulate: boolean;
+  reducedMotion: boolean;
+  /** Screenshot the elements behind layout-shift and overflow findings. */
+  shots: boolean;
+  /** Lowest severity that makes the run fail (exit code 1). */
+  failOn: FailOn;
+  auth?: AuthOptions | undefined;
+}
+
+export function defaultCheckOptions(url: string): CheckOptions {
+  return {
+    url: normalizeUrl(url),
+    devices: [...DEFAULT_DEVICES],
+    outDir: DEFAULT_OUT_DIR,
+    waitMs: 0,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    emulate: true,
+    reducedMotion: false,
+    shots: false,
+    failOn: 'error',
+  };
+}
+
 /**
  * Accept what an agent is likely to type:
  *   http(s)://…, file://…  -> unchanged

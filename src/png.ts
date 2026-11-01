@@ -11,6 +11,50 @@ export function pngSize(buf: Uint8Array): { width: number; height: number } {
   return { width: view.getUint32(16), height: view.getUint32(20) };
 }
 
+/** Width/height of a PNG, JPEG, GIF or WebP from its header; undefined for anything else. */
+export function imageSize(buf: Uint8Array): { width: number; height: number } | undefined {
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const ascii = (at: number, len: number) => String.fromCharCode(...buf.subarray(at, at + len));
+  try {
+    if (buf.length >= 24 && SIGNATURE.every((b, i) => buf[i] === b)) return pngSize(buf);
+    if (ascii(0, 4) === 'GIF8' && buf.length >= 10) {
+      return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
+    }
+    if (ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP') {
+      const kind = ascii(12, 4);
+      if (kind === 'VP8 ') return { width: view.getUint16(26, true) & 0x3fff, height: view.getUint16(28, true) & 0x3fff };
+      if (kind === 'VP8L') {
+        const bits = view.getUint32(21, true);
+        return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+      }
+      if (kind === 'VP8X') {
+        const u24 = (at: number) => buf[at]! | (buf[at + 1]! << 8) | (buf[at + 2]! << 16);
+        return { width: u24(24) + 1, height: u24(27) + 1 };
+      }
+      return undefined;
+    }
+    if (buf[0] === 0xff && buf[1] === 0xd8) {
+      // Walk the JPEG segments to the first start-of-frame marker.
+      for (let at = 2; at + 9 < buf.length; ) {
+        if (buf[at] !== 0xff) return undefined;
+        const marker = buf[at + 1]!;
+        if (marker === 0xff) {
+          at++;
+          continue;
+        }
+        const len = view.getUint16(at + 2);
+        if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+          return { width: view.getUint16(at + 7), height: view.getUint16(at + 5) };
+        }
+        at += 2 + len;
+      }
+    }
+  } catch {
+    // Truncated header.
+  }
+  return undefined;
+}
+
 export interface RawImage {
   width: number;
   height: number;

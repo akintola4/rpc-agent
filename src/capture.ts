@@ -1,6 +1,6 @@
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename, extname, resolve } from 'node:path';
-import type { Browser, Page } from 'playwright';
+import type { Browser, BrowserContext, Page } from 'playwright';
 import {
   applyHeaders,
   AuthRequiredError,
@@ -124,19 +124,7 @@ export async function capture(opts: ShotOptions, hooks: CaptureHooks = {}): Prom
       try {
         shot = await captureDevice(browser, device, opts, outDir, hooks, auth);
       } catch (err) {
-        shot = baseShot(device);
-        if (err instanceof AuthRequiredError) {
-          shot.status = err.status;
-          shot.finalUrl = err.finalUrl;
-          shot.error = err.message;
-          shot.code = err.code;
-          shot.hint = err.hint;
-        } else {
-          const e = explainError(err, { url: opts.url, timeoutMs: opts.timeoutMs, waitFor: opts.waitFor });
-          shot.error = redact(e.error, auth.secrets);
-          shot.code = e.code;
-          if (e.hint) shot.hint = redact(e.hint, auth.secrets);
-        }
+        shot = { ...baseShot(device), ...describeFailure(err, opts, auth) };
       }
       if (shot.consoleErrors?.length && auth.secrets.length) {
         shot.consoleErrors = shot.consoleErrors.map(l => redact(l, auth.secrets));
@@ -151,6 +139,31 @@ export async function capture(opts: ShotOptions, hooks: CaptureHooks = {}): Prom
   }
 }
 
+export interface DeviceFailure {
+  error: string;
+  code: string;
+  hint?: string;
+  status?: number | null;
+  finalUrl?: string;
+}
+
+/** A device's navigation/capture failure as `{ error, code, hint }`, secrets scrubbed. */
+export function describeFailure(
+  err: unknown,
+  opts: { url: string; timeoutMs: number; waitFor?: string | undefined },
+  auth: ResolvedAuth
+): DeviceFailure {
+  if (err instanceof AuthRequiredError) {
+    return { status: err.status, finalUrl: err.finalUrl, error: err.message, code: err.code, hint: err.hint };
+  }
+  const e = explainError(err, { url: opts.url, timeoutMs: opts.timeoutMs, waitFor: opts.waitFor });
+  return {
+    error: redact(e.error, auth.secrets),
+    code: e.code,
+    ...(e.hint ? { hint: redact(e.hint, auth.secrets) } : {}),
+  };
+}
+
 function baseShot(device: Device): DeviceShot {
   return {
     device: device.id,
@@ -160,14 +173,13 @@ function baseShot(device: Device): DeviceShot {
   };
 }
 
-async function captureDevice(
+/** A fresh context for one device: viewport, DPR, mobile emulation, media features and auth state. */
+export async function newDeviceContext(
   browser: Browser,
   device: Device,
-  opts: ShotOptions,
-  outDir: string,
-  hooks: CaptureHooks,
+  opts: Pick<ShotOptions, 'emulate' | 'colorScheme' | 'reducedMotion'>,
   auth: ResolvedAuth
-): Promise<DeviceShot> {
+): Promise<BrowserContext> {
   const emu = opts.emulate ? emulationFor(device) : undefined;
   const context = await browser.newContext({
     viewport: { width: device.width, height: device.height },
@@ -181,6 +193,18 @@ async function captureDevice(
     ...(auth.state ? { storageState: auth.state } : {}),
   });
   if (auth.cookies.length) await context.addCookies(auth.cookies);
+  return context;
+}
+
+async function captureDevice(
+  browser: Browser,
+  device: Device,
+  opts: ShotOptions,
+  outDir: string,
+  hooks: CaptureHooks,
+  auth: ResolvedAuth
+): Promise<DeviceShot> {
+  const context = await newDeviceContext(browser, device, opts, auth);
   const result = baseShot(device);
   const errors = new Set<string>();
 
@@ -354,7 +378,7 @@ const SCROLL_HEIGHT_JS = `Math.max(document.documentElement.scrollHeight, docume
  * Network idle (bounded: dev servers with HMR or analytics beacons may never
  * go idle), web fonts, and pending <img> loads.
  */
-async function settle(page: Page, timeoutMs: number): Promise<void> {
+export async function settle(page: Page, timeoutMs: number): Promise<void> {
   await page
     .waitForLoadState('networkidle', { timeout: Math.min(timeoutMs, 10_000) })
     .catch(() => {});
