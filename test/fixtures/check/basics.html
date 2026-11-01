@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Basics fixture</title>
+</head>
+<body style="margin:0;font:16px sans-serif">
+<p>Logs a console error and throws during load.</p>
+<script>
+  console.error('fixture: failed to load config');
+  setTimeout(() => { throw new Error('fixture: boom'); }, 0);
+</script>
+</body>
+</html>

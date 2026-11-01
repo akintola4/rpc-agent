@@ -25,8 +25,9 @@ import {
   writeSession,
 } from '../src/auth.js';
 import { capture, launchBrowser } from '../src/capture.js';
+import { runCheck } from '../src/check.js';
 import { createServer as createMcpServer } from '../src/mcp.js';
-import { defaultShotOptions } from '../src/options.js';
+import { defaultCheckOptions, defaultShotOptions } from '../src/options.js';
 import { capturedLines, colors, summaryLines } from '../src/ui.js';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -499,9 +500,11 @@ describe('MCP screenshot with auth', () => {
     const client = await mcpClient();
     try {
       const { tools } = await client.listTools();
-      expect(tools.map(t => t.name)).toEqual(['screenshot', 'list_devices', 'list_sessions']);
-      const props = Object.keys((tools[0]!.inputSchema as { properties: object }).properties);
-      expect(props).toEqual(expect.arrayContaining(['cookies', 'headers', 'storageState', 'useSession', 'allowOrigins']));
+      expect(tools.map(t => t.name)).toEqual(['screenshot', 'check', 'list_devices', 'list_sessions']);
+      for (const tool of tools.slice(0, 2)) {
+        const props = Object.keys((tool.inputSchema as { properties: object }).properties);
+        expect(props).toEqual(expect.arrayContaining(['cookies', 'headers', 'storageState', 'useSession', 'allowOrigins']));
+      }
     } finally {
       await client.close();
     }
@@ -558,5 +561,28 @@ describe('MCP screenshot with auth', () => {
     } finally {
       await client.close();
     }
+  });
+});
+
+describe('rpc check with auth', () => {
+  it('checks the protected page with a cookie and never echoes it', async () => {
+    const report = await runCheck(
+      { ...defaultCheckOptions(`${APP}/dashboard`), devices: ['desktop-1440'], auth: { cookies: [{ name: 'sid', value: COOKIE_SECRET }] } },
+      { browser }
+    );
+    expect(report.devices[0]).toMatchObject({ status: 200, title: 'Dashboard', finalUrl: `${APP}/dashboard` });
+    expect(report.auth?.cookies?.[0]).toMatchObject({ name: 'sid', value: MASK });
+    expect(report.findings.some(f => f.id === 'auth-required')).toBe(false);
+    expectNoSecrets(JSON.stringify(report));
+  });
+
+  it('fails with AUTH_REQUIRED and the rpc login hint when redirected to sign-in', async () => {
+    const report = await runCheck(
+      { ...defaultCheckOptions(`${APP}/dashboard`), devices: ['desktop-1440'], auth: { useSession: false } },
+      { browser }
+    );
+    expect(report.devices[0]).toMatchObject({ code: 'AUTH_REQUIRED' });
+    const f = report.findings.find(x => x.id === 'auth-required');
+    expect(f).toMatchObject({ severity: 'error', fix: `Session missing or expired: run \`rpc login ${APP}\`` });
   });
 });

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mobile viewport fixture</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  .hero { min-height: 100vh; background: #eef; }
+  /* Fallback pattern: the CSSOM keeps only 100dvh, so this is not flagged. */
+  .ok-hero { height: 100vh; height: 100dvh; }
+  .wide { width: 600px; height: 40px; background: #f99; }
+  .clipped { overflow-x: auto; } .clipped > div { width: 900px; height: 20px; }
+  .tiny { width: 24px; height: 24px; padding: 0; }
+  .search { font-size: 14px; }
+  @media (min-width: 1024px) { .desktop-only { height: 100vh; } }
+</style>
+</head>
+<body>
+<section class="hero">
+  <button class="tiny" aria-label="Close">×</button>
+  <label>Search <input class="search" type="search"></label>
+  <div class="wide">600px wide</div>
+  <div class="clipped"><div>scrolls inside its own box</div></div>
+  <div class="ok-hero"></div>
+  <div class="desktop-only"></div>
+</section>
+</body>
+</html>
