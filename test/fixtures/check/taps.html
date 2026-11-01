@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tap target fixture</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  .chip { display: inline-block; }
+  .tiny { width: 24px; height: 24px; padding: 0; }
+  .big { display: block; min-width: 44px; min-height: 44px; }
+</style>
+</head>
+<body>
+<!-- Exempt (WCAG 2.5.8 inline): links in a sentence. -->
+<p>Read the <a class="prose" href="#terms">terms</a> before you start.</p>
+<p><strong><a class="nested" href="#docs">The docs</a></strong> cover the rest.</p>
+<!-- Counted: a standalone link, a nav of links, a link styled as a box, and buttons. -->
+<div><a class="solo" href="#help">Help</a></div>
+<nav><a class="nav home" href="#home">Home</a> · <a class="nav about" href="#about">About</a></nav>
+<p>See the <a class="chip" href="#chip">chip</a> link.</p>
+<p>Press <button class="inline-btn">OK</button> to go on.</p>
+<button class="tiny" aria-label="Close">×</button>
+<a class="big" href="#big">Big enough</a>
+</body>
+</html>

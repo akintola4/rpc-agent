@@ -30,6 +30,7 @@ import { createServer as createMcpServer } from '../src/mcp.js';
 import { defaultCheckOptions, type CheckOptions } from '../src/options.js';
 import { imageSize } from '../src/png.js';
 import { checkBoxes, colors } from '../src/ui.js';
+import { failFast } from './serve.js';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const CLI = resolve(ROOT, 'src', 'cli.ts');
@@ -43,23 +44,30 @@ let server: Server;
 let ORIGIN: string;
 let browser: Browser;
 
+const FONT_FILES: Record<string, string> = {
+  '/fonts/plex-400.woff2': 'ibm-plex-mono-latin-400-normal.woff2',
+  '/fonts/plex-400-italic.woff2': 'ibm-plex-mono-latin-400-italic.woff2',
+};
+
 beforeAll(async () => {
-  server = createServer(async (req, res) => {
+  const missing = Object.values(FONT_FILES).filter(f => !existsSync(join(FONTS, f)));
+  if (missing.length) throw new Error(`run pnpm install: @fontsource/ibm-plex-mono is missing (${missing.join(', ')} not in ${FONTS})`);
+  server = createServer(failFast(async (req, res) => {
     const path = new URL(req.url!, 'http://x').pathname;
-    const fonts: Record<string, string> = {
-      '/fonts/plex-400.woff2': 'ibm-plex-mono-latin-400-normal.woff2',
-      '/fonts/plex-400-italic.woff2': 'ibm-plex-mono-latin-400-italic.woff2',
-    };
-    if (fonts[path]) {
-      res.writeHead(200, { 'content-type': 'font/woff2', 'access-control-allow-origin': '*' }).end(await readFile(join(FONTS, fonts[path])));
+    const font = FONT_FILES[path];
+    if (font) {
+      const body = await readFile(join(FONTS, font));
+      res.writeHead(200, { 'content-type': 'font/woff2', 'access-control-allow-origin': '*' }).end(body);
       return;
     }
     if (path === '/og.png') {
-      res.writeHead(200, { 'content-type': 'image/png' }).end(await readFile(join(FIXTURES, 'og.png')));
+      const body = await readFile(join(FIXTURES, 'og.png'));
+      res.writeHead(200, { 'content-type': 'image/png' }).end(body);
       return;
     }
     if (path === '/gone') {
-      res.writeHead(404, { 'content-type': 'text/html' }).end(await readFile(join(FIXTURES, 'basics.html')));
+      const body = await readFile(join(FIXTURES, 'basics.html'));
+      res.writeHead(404, { 'content-type': 'text/html' }).end(body);
       return;
     }
     const file = join(FIXTURES, path.slice(1));
@@ -69,7 +77,7 @@ beforeAll(async () => {
     }
     const html = (await readFile(file, 'utf8')).replaceAll('{{ORIGIN}}', ORIGIN);
     res.writeHead(200, { 'content-type': 'text/html' }).end(html);
-  });
+  }));
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   ORIGIN = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   browser = await launchBrowser();
@@ -77,7 +85,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await browser?.close();
-  await new Promise(r => server?.close(r));
+  // The font precheck throws before the server exists.
+  if (server) await new Promise(r => server.close(r));
   rmSync(TMP, { recursive: true, force: true });
 });
 
@@ -272,6 +281,16 @@ describe('mobile viewport', () => {
     expect(byId(r, 'input-zoom').items).toEqual([{ selector: 'input.search', text: '14px', value: 14 }]);
     for (const f of r.findings.filter(x => x.check === 'mobile')) expect(f.devices).toEqual([PHONE]);
     expect(r.devices.map(d => d.mobile)).toEqual([true, false]);
+  });
+
+  it('skips inline links in a sentence and still counts small links and buttons', async () => {
+    const r = await check('taps.html');
+    const tap = byId(r, 'tap-target-small');
+    expect(tap.message).toBe('6 of 7 tap targets are smaller than 44×44px');
+    expect(tap.fix).toMatch(/Inline links in a sentence are exempt \(WCAG 2\.5\.8\)/);
+    expect(selectors(tap).sort()).toEqual(['a.chip', 'a.nav.about', 'a.nav.home', 'a.solo', 'button.inline-btn', 'button.tiny']);
+    expect(selectors(tap)).not.toContain('a.prose');
+    expect(selectors(tap)).not.toContain('a.nested');
   });
 
   it('--shots saves the overflowing element and the shifted one', async () => {

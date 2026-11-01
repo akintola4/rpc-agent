@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `rpc check`: the tap-target check skips inline links in a sentence (WCAG
+  2.5.8 inline exception). A link is skipped when its computed `display` is
+  `inline` and its block of text has letters or digits outside any
+  control. Buttons, `[role=button]`, links laid out as boxes, nav links and
+  icon links still count, and the threshold stays 44x44.
+- Test servers answer 500 with the error when a fixture file is missing
+  instead of hanging, and the check suite stops early with "run pnpm
+  install" when `@fontsource/ibm-plex-mono` isn't installed.
+
 ## 0.5.0
 
 Ship-check: `rpc check <url>` audits a page before launch, from the CLI, in

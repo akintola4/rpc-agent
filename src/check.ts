@@ -796,7 +796,7 @@ export function mobileFindings(d: MobileData): Draft[] {
       check: 'mobile',
       severity: 'warn',
       message: `${d.smallTargets.length} of ${d.tapTargets} tap targets are smaller than ${MIN_TAP}×${MIN_TAP}px`,
-      fix: `Make each control at least ${MIN_TAP}×${MIN_TAP} CSS px: padding, min-height/min-width, or a larger hit area with a ::before inset.`,
+      fix: `Make each control at least ${MIN_TAP}×${MIN_TAP} CSS px: padding, min-height/min-width, or a larger hit area with a ::before inset. Inline links in a sentence are exempt (WCAG 2.5.8).`,
       selector: d.smallTargets[0]!.selector,
       items: d.smallTargets.slice(0, 15).map(({ selector, text, value }) => ({ selector, text, value })),
     });

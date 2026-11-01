@@ -436,7 +436,7 @@ These run on phone devices only.
 | --- | --- | --- | --- |
 | `horizontal-overflow` | error | `scrollWidth` is wider than the layout viewport. Lists the outermost elements that stick out, furthest first | `max-width: 100%` on the element, or `overflow-x: auto` on its wrapper |
 | `vh-units` | warn | A rendered element sized with `100vh` in `height`, `min-height` or `max-height`, from a stylesheet rule that applies or an inline style | `100dvh` or `100svh`, with `100vh` before it as a fallback |
-| `tap-target-small` | warn | Links, buttons and form controls smaller than 44x44 CSS px. Links inside running text are exempt | Padding, `min-height`, or a bigger hit area |
+| `tap-target-small` | warn | Links, buttons and form controls smaller than 44x44 CSS px. Inline links in a sentence are exempt, per the WCAG 2.5.8 inline exception: a link with `display: inline` and other text in the same block. Buttons and links laid out as boxes (`inline-block`, `flex`, `block`) still count | Padding, `min-height`, or a bigger hit area |
 | `input-zoom` | warn | A text field with `font-size` under 16px; iOS Safari zooms the page when it gets focus | `font-size: 16px` or more |
 
 A headless phone has no browser bars, so `100vh` and `100dvh` measure the

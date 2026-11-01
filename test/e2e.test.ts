@@ -10,6 +10,7 @@ import { capture, fileStem, launchBrowser, type ShotResult } from '../src/captur
 import { renderPreview } from '../src/composite.js';
 import { resolveDevice } from '../src/devices.js';
 import { defaultShotOptions } from '../src/options.js';
+import { failFast } from './serve.js';
 
 const FIXTURES = resolve(import.meta.dirname, 'fixtures');
 const OUT = resolve(import.meta.dirname, '..', '.rpc-shots', 'e2e');
@@ -42,14 +43,15 @@ async function pixel(path: string, x: number, y: number): Promise<[number, numbe
 }
 
 beforeAll(async () => {
-  server = createServer(async (req, res) => {
+  server = createServer(failFast(async (req, res) => {
     const file = join(FIXTURES, req.url === '/' ? 'page.html' : req.url!.slice(1));
     if (!file.startsWith(FIXTURES) || !existsSync(file)) {
       res.writeHead(404).end();
       return;
     }
-    res.writeHead(200, { 'content-type': 'text/html' }).end(await readFile(file));
-  });
+    const body = await readFile(file);
+    res.writeHead(200, { 'content-type': 'text/html' }).end(body);
+  }));
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   browser = await launchBrowser();
