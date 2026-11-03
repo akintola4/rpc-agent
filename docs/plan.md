@@ -372,3 +372,136 @@ findings that come out the same on several devices are merged.
 **Tests.** Fixtures served by a local http server, one per check plus a
 clean page that must produce no errors or warnings; CLS on a fixture with a
 known shift lands in a fixed range across runs.
+
+## v0.6 Motion
+
+Driven by a full-page shot of a marketing site with scroll animations that
+came out wrong three ways: tall blank bands where pinned (GSAP
+ScrollTrigger-style) sections sit, text blocks caught halfway through their
+reveal, and carousels frozen on one frame. Every pattern is reproduced by a
+local fixture in `test/fixtures/motion/`; no real site is used.
+
+**Why the blank bands.** Full-page capture renders the page at scroll 0
+(captureBeyondViewport). A pin spacer reserves the pinned section's scroll
+distance as padding below it, and at scroll 0 the section sits at the top of
+its spacer, so the padding is captured as empty space. A person scrolling
+sees the section held in place for that distance instead.
+
+**1. Detection (`src/motion.ts`, in-page scripts like `check-page.ts`).**
+Per device, after the page has settled:
+
+- running animations: `document.getAnimations()` in `running` state on
+  document timelines, split into finite ones and infinite loops;
+- pins: `.pin-spacer` elements taller than their child by a quarter of the
+  viewport or more, `position: sticky` sections (at least half a viewport
+  tall) whose parent is at least half a viewport taller, and `position:
+  fixed` sections inside such a parent;
+- hidden reveals: rendered elements with text or media whose computed
+  `opacity` is under 0.1 or whose transform moves them 24px or more (or
+  scales under 0.85), and that carry a reveal-style class
+  (`reveal`, `fade`, `aos`, `in-view`, `animate`, ...), a reveal data
+  attribute (`data-aos`, `data-sal`, ...) or inline opacity/transform
+  written by a library. Outermost element only. Viewport (plus half a
+  viewport) for `rpc check` and viewport shots; the whole page for full-page
+  shots;
+- carousels and marquees: Swiper, Embla, Splide, Keen, Flickity, Slick and
+  Glide root classes, `aria-roledescription="carousel"`, horizontal
+  scrollers with `scroll-snap-type` on x, and tracks whose `scrollLeft` or
+  transform changes across a 300 ms sample.
+
+**2. `rpc check` Motion group.** Same detection after the check's scroll,
+plus a short settle probe (1 s cap). Findings: `motion-running` (warn),
+`motion-reveal-hidden` (warn), `motion-loop` (info), `motion-pinned` (info),
+`motion-carousel` (info). Never `error`. Fix hints name `--wait`,
+`--finish-animations`, `--reduced-motion` and `rpc record`.
+
+**3. `rpc shot` warnings.** `DeviceShot.warnings` (id, message, fix, items
+with selectors), printed under each device in the terminal and listed in
+the MCP headline: "N elements were still animating when captured",
+"pinned section: the stitched shot may show blank space" (only when a pin
+was left in place), "N elements still hidden by a reveal animation", and
+"carousel: use `rpc record` for motion".
+
+**4. Settle.** An in-page wait used at the top of the page before every
+capture and at each warm-up scroll step: done when no finite animation on
+the document timeline is running on a visible element and no `style` or
+`class` attribute on a visible element changed for a quiet period. Capped
+so it can't hang: 150 ms quiet and 2 s cap for the final settle, 120 ms
+quiet and 800 ms cap per warm-up step, 8 s for all warm-up steps together
+(after that the old 100 ms pause). An element still changing when a step
+hits its cap is remembered as a loop (a JS marquee, a ticker) and ignored by
+later steps. The result (`settled`, ms, elements still active) is on the
+shot as `motion.settle`. Static pages pay the quiet period only, so
+existing tall-page timing stays close to v0.5.
+
+**5. `--finish-animations`.** Calls `.finish()` on every finite Web
+Animation (CSS animations and transitions included), then, only when the
+globals exist and each step in its own try/catch: GSAP tweens and timelines
+on `gsap.globalTimeline` that aren't scroll-linked and don't repeat forever
+go to `progress(1)`, and `ScrollTrigger.getAll()` triggers that aren't
+scrubbed or pinned get their animation to `progress(1)`. Scrubbed and
+pinned animations follow the scroll position, so they keep their scroll-0
+state. Counts go on `motion.finished`. Nothing happens for a library that
+isn't there; bundled GSAP that isn't on `window` can't be reached and is a
+documented limit.
+
+**6. Unpin (default for full page, `--no-unpin` to keep pins).** After the
+warm-up and settle, each detected pin is collapsed with a stylesheet of
+`!important` rules keyed on `data-rpc-unpin` attributes, so later inline
+writes from the library (a ScrollTrigger refresh on the capture's resize)
+can't undo it: the spacer loses its padding and fixed height, the pinned
+element goes back into flow (`position: relative`, no offsets or
+transform), a sticky section's tall parent gets `height: auto`. The section
+then appears once, at its scroll-0 frame, and everything after it moves up
+by the removed distance. `motion.unpinned` lists each pin with its selector
+and the CSS px removed; the scroll height and stitched height are measured
+after it. Deterministic: no scrolling or timing involved.
+
+**7. `rpc record <url>`.** One device (`-d`, default desktop-1440), a
+duration (`--duration`, seconds, default 5, max 30), optional
+`--selector` (scrolled into view, settled, then cropped to its box,
+clamped to the viewport), `--gif`, `--mp4`, the shot auth flags, `--json`,
+`--out`.
+
+Frames: a `page.screenshot({ clip, type: 'jpeg' })` loop. Measured on
+Chromium 156 headless: about 30 fps at DPR 2 and 3 and 60 fps at DPR 1, at
+device pixels, cropped exactly to the clip. Rejected: CDP screencast frames
+come at CSS-pixel size in headless (393x852 for a DPR 3 phone), so they lose
+the pixel density and need a scaled crop; Playwright's `recordVideo` records
+the whole viewport at CSS size with a fixed bitrate and can't crop.
+
+Encoding: frames are written to ffmpeg at a constant 25 fps, each frame
+repeated until the next one's timestamp, so the video's length is the
+requested duration. The ffmpeg is Playwright's own build
+(`playwright install` already downloads it next to Chromium: MJPEG in, VP9
+webm out, crop/scale/pad, PNG out), found through Playwright's registry, and
+a system `ffmpeg` on PATH is the fallback. Output: `<stem>.webm` (VP9) and
+`<stem>-poster.png` (the first frame, from a PNG screenshot of the same
+clip). `--mp4` needs a system ffmpeg with an H.264 encoder; without one the
+mp4 is skipped with a warning, never an error. `--gif`: Playwright's ffmpeg
+decodes the webm to PNG frames at 10 fps (at most 640 px wide), and a small
+GIF encoder in `src/gif.ts` (median-cut palette shared by all frames,
+unchanged pixels transparent, LZW) writes `<stem>.gif`. No new
+dependencies.
+
+MCP: a `record` tool with the same options (plus the screenshot tool's auth
+params) returns the paths and a short summary, and the poster as an inline
+JPEG. `rpc doctor` reports the ffmpeg it found (Playwright's or the
+system's) and whether mp4 is available; doctor's exit code still depends on
+Chromium only.
+
+**Tests.** Fixtures: `pinned.html` (a plain-JS pin spacer that mimics
+ScrollTrigger: padding below the section, `position: fixed` while active,
+offset at the end), `reveal.html` (IntersectionObserver blocks animated by
+a small GSAP-shaped tween helper writing inline styles, `?slow` for tweens
+longer than the settle cap), `keyframes.html` (a finite CSS keyframe
+animation and an infinite spinner), `carousel.html` (an auto-advancing
+scroll-snap carousel) and `static.html` (no motion findings). Assertions:
+Motion findings in `rpc check` and in `rpc shot` warnings; the pinned
+fixture's stitched shot has no blank rows and is shorter by the spacer,
+with `--no-unpin` showing the blank band; reveal blocks fully opaque after
+settle and after `--finish-animations` on `?slow`; `rpc record --selector`
+writes a webm of the element's size times DPR and the requested length,
+and the MCP `record` tool returns paths and a poster; determinism by
+running the pinned shot and the record twice. The existing tall-page tests
+run unchanged.
