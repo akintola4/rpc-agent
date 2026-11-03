@@ -64,6 +64,7 @@ these docs say `rpc`, or `pnpm rpc` from inside the repo.
 rpc                    # interactive: pick a URL, devices and options
 rpc shot <url> [options]
 rpc check <url> [options]  # pre-launch audit, see Ship-check below
+rpc record <url> [options] # a few seconds of video of the page or one element
 rpc login <url> [--form]   # sign in once; later shots of that origin use the session
 rpc sessions [list|clear [origin]]
 rpc devices [--json]
@@ -94,6 +95,8 @@ the files it wrote:
 | `--slice-width <px>` | Maximum slice width. Default 768 |
 | `--max-height <px>` | Full-page cap in CSS px. Default 60000 |
 | `--reduced-motion` | Emulate `prefers-reduced-motion: reduce` |
+| `--finish-animations` | Jump animations to their end state before capturing. See [Animation-aware capture](#animation-aware-capture) |
+| `--no-unpin` | With `--full-page`, keep pinned sections as they are instead of collapsing them |
 | `-o, --out <dir>` | Output directory. Default `./.rpc-shots` |
 | `--wait-for <selector>` | Wait for a visible element before capturing |
 | `--wait <ms>` | Extra settle delay after load |
@@ -148,6 +151,85 @@ and `100vh` sections keep their real height.
 
 Bezels frame the above-the-fold viewport. With `--bezels --full-page` you get
 both: the full page raw, and the first screen framed.
+
+### Animation-aware capture
+
+A stitched shot of a page with scroll animations used to come out wrong in
+three ways: pinned scroll sections left tall blank bands, text was caught
+halfway through its reveal, and carousels froze on whatever slide was up.
+
+#### Settle
+
+Before each capture, and at every step of the full-page warm-up
+scroll, rpc waits until the visible part of the page stops moving: no
+finite animation running on a visible element, and no `style` or `class`
+change on one for 150 ms (120 ms per warm-up step). It gives up after 2 s
+(800 ms per step, 8 s for the whole warm-up), so a page that never stops
+can't hang it. Anything still changing when a step runs out of time is
+treated as a loop (a JS marquee, a ticker), and later steps stop waiting for
+it. A static page only pays the quiet period. The result is on each shot as
+`motion.settle`: `settled`, `ms`, and the selectors still active.
+
+#### Pinned sections
+
+GSAP ScrollTrigger pins a section by wrapping it in a
+`.pin-spacer` with padding below it, then fixing the section in place while
+you scroll through that padding. A full-page capture renders the page at
+scroll 0, where the section sits at the top of its spacer and the padding
+is empty, so the shot gets a blank band as tall as the pin's scroll
+distance. With `--full-page`, rpc collapses each pin it finds. The spacer
+loses its padding, the section goes back into normal flow, and the shot
+shows it once with the rest of the page right after it. A sticky section
+that is the only child of a much taller parent gets the same treatment. The
+rules go in an injected stylesheet as `!important`, so when the library
+rewrites its inline styles during the capture, they still win. Each
+collapsed pin is listed in `motion.unpinned` with the CSS px removed, and
+the stitched height is measured after the collapse. `--no-unpin` turns it
+off.
+
+| `--no-unpin` (before) | default (after) |
+| --- | --- |
+| <img alt="A full-page shot of a fixture with a pinned orange section: a 2100px white band sits between the section and the green outro" src="https://raw.githubusercontent.com/akintola4/rpc-agent/main/docs/media/motion/pinned-before.png" width="240"> | <img alt="The same page with the pin collapsed: blue intro, orange section, green outro, no gap" src="https://raw.githubusercontent.com/akintola4/rpc-agent/main/docs/media/motion/pinned-after.png" width="240"> |
+
+#### Finish animations
+
+`--finish-animations` calls `.finish()` on every finite Web Animation,
+which covers CSS animations and transitions too. If `window.gsap` exists,
+tweens and timelines on its global timeline that don't repeat forever go to
+`progress(1)`. If `window.ScrollTrigger` exists, triggers that aren't
+scrubbed or pinned get their animation set to `progress(1)`. Scrubbed and
+pinned ones follow the scroll position, so they keep their scroll-0 state.
+Each library step runs in its own try/catch and does nothing when the
+library isn't there. Infinite loops are left alone. The counts are in
+`motion.finished`.
+
+#### Reduced motion
+
+`--reduced-motion` still emulates
+`prefers-reduced-motion: reduce`. On a site that respects it, that's the
+cleanest fix, because the animations never run.
+
+#### Warnings
+
+Each shot gets a `warnings` list in the JSON, and the terminal
+prints them under the device:
+
+```
+ok desktop-1440 (1440x900 @1x)
+   .rpc-shots/localhost-3000-desktop-1440.png  1440x900
+   warn: 1 element was still animating when captured: h1.hero-title
+   warn: carousel: use `rpc record` for motion: #carousel
+```
+
+| id | When |
+| --- | --- |
+| `motion-running` | Elements were still animating or changing when the settle ran out of time: "N elements were still animating when captured" |
+| `motion-pinned` | Full page only. A pin was left in place (`--no-unpin`, or one that couldn't be collapsed): "pinned section: the stitched shot may show blank space" |
+| `motion-reveal-hidden` | Content still at opacity 0, or offset by 24px or more, that looks like a reveal (see [Motion](#motion)) |
+| `motion-carousel` | A carousel or marquee is in the shot: "carousel: use `rpc record` for motion" |
+
+Each warning has a `fix` naming the flag to try. Warnings never change the
+exit code.
 
 ### Terminal, pipes and CI
 
@@ -305,8 +387,8 @@ rpc shot localhost:3000/app --storage-state auth.json
 `rpc check <url>` audits one page before you call it done. It loads the page
 on a phone and a desktop width, the way `rpc shot` does, and lists what's
 wrong: missing or broken social tags, layout shift, buttons a screen reader
-can't name, fonts that hide text while they load, and the mobile viewport
-bugs that only show up on a phone.
+can't name, fonts that hide text while they load, the mobile viewport bugs
+that only show up on a phone, and motion a screenshot will get wrong.
 
 ```sh
 rpc check localhost:3000
@@ -444,6 +526,21 @@ same there. That's why `vh-units` reads the CSS instead of measuring
 elements. The `height: 100vh; height: 100dvh` fallback pattern isn't
 flagged: the browser keeps only the last value it understands.
 
+#### Motion
+
+After the scroll, rpc gives running animations up to 1 s to stop, then
+looks at the viewport plus half a viewport above and below. These findings
+are about whether a screenshot comes out right, and a page can ship with
+them, so they are `warn` or `info` and never `error`.
+
+| id | Severity | When | Fix |
+| --- | --- | --- | --- |
+| `motion-running` | warn | Finite animations (from `document.getAnimations()`) or style changes still going on visible elements | `rpc shot --finish-animations`, `--wait`, or `--reduced-motion` |
+| `motion-reveal-hidden` | warn | Elements with text or media at opacity under 0.1, `visibility: hidden`, offset by 24px or more, or scaled under 0.85, that also carry a reveal class (`reveal`, `fade`, `aos`, `in-view`, `animate` and similar), a reveal attribute (`data-aos`, `data-sal`, `data-scroll` and similar) or inline opacity or transform written by a library. Only the outermost element is listed | Make sure the reveal fires, and that the content shows without JavaScript or animation |
+| `motion-loop` | info | Infinite animations: spinners, pulses, CSS marquees | Stop them under `prefers-reduced-motion: reduce` |
+| `motion-pinned` | info | A `.pin-spacer` taller than its section by a quarter of the viewport, a pin that `ScrollTrigger.getAll()` reports, or a sticky or fixed section (half a viewport tall or more) that is the only child of a parent at least half a viewport taller | `rpc shot --full-page` collapses it; `rpc record --selector` shows it moving |
+| `motion-carousel` | info | Swiper, Embla, Splide, Keen, Flickity, Slick or Glide roots, `aria-roledescription="carousel"`, horizontal scrollers with `scroll-snap-type` on x, and tracks whose scroll position or transform changes during a 300 ms sample | `rpc record <url> --selector '<the carousel>'` |
+
 ### JSON report
 
 `--json` prints this object, and the MCP `check` tool returns the same one.
@@ -522,9 +619,62 @@ Before you say UI work is done, run the rpc `check` tool on each page you
 changed and fix every error. Fix the warnings too, or say why one doesn't apply.
 ```
 
+## Recording motion: `rpc record`
+
+A still can't show a carousel, a marquee, or a pinned section whose panels
+slide as you scroll. `rpc record` takes a few seconds of video of the page,
+or of one element on it.
+
+```sh
+rpc record localhost:3000 --selector '.hero-carousel'     # 5 s of one element
+rpc record localhost:3000 -d iphone --duration 10 --gif   # whole phone viewport, plus a GIF
+rpc record example.com --selector '#logos' --mp4          # mp4 too, if ffmpeg is on PATH
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--selector <css>` | Record this element. rpc scrolls it into view, waits for reveals around it to settle, and crops the video to its box. If it's bigger than the viewport, the visible part is recorded and the result says so |
+| `--duration <s>` | Seconds of video, 0.5 to 30. Default 5 |
+| `-d, --device <id>` | One device id or alias. Default `desktop-1440` |
+| `--gif` | Also write a GIF: 10 fps, at most 640 px wide |
+| `--mp4` | Also write an mp4. This needs an ffmpeg with an H.264 encoder on PATH; without one, rpc skips the mp4 and says so |
+| `-o, --out <dir>`, `--json`, `--open` | As in `rpc shot` |
+| `--wait-for`, `--wait`, `--timeout`, `--color-scheme`, `--reduced-motion`, `--no-emulate` | As in `rpc shot` |
+| `--cookie`, `--header`, `--storage-state`, `--no-session`, `--allow-origin` | As in `rpc shot` |
+
+It writes `<host>[-<path>]-<device>[-<selector>].webm` (VP9) and a
+`-poster.png` of the first frame, plus the `.gif` and `.mp4` when asked:
+
+```
+ok iphone-15-pro (393x852 @3x) #carousel
+   .rpc-shots/localhost-3000-iphone-15-pro-carousel.webm  1080x600, 3s at 25 fps (90 frames captured, playwright ffmpeg)
+   .rpc-shots/localhost-3000-iphone-15-pro-carousel-poster.png  1080x600 poster
+   .rpc-shots/localhost-3000-iphone-15-pro-carousel.gif  640x356, 32 frames
+```
+
+<img alt="A GIF recorded from a fixture's autoplaying carousel: four coloured slides advancing in turn" src="https://raw.githubusercontent.com/akintola4/rpc-agent/main/docs/media/motion/record-carousel.gif" width="360">
+
+Frames come from a loop of `page.screenshot()` calls clipped to the
+element's box. Headless Chromium returns those at device pixels and cropped
+exactly, at about 30 fps on a DPR 2 or 3 phone and 60 fps at DPR 1. The two
+obvious alternatives do worse. CDP screencast frames arrive at CSS pixel
+size in headless mode (393x852 for a DPR 3 phone), so they lose the
+pixel density and need a scaled crop. Playwright's `recordVideo` records the
+whole viewport at CSS size with a fixed bitrate, and it can't crop.
+
+The frames go to ffmpeg as MJPEG at a constant 25 fps. Each one is repeated
+until the next one's timestamp, so the video is as long as you asked for,
+whatever rate the screenshots came in at. The ffmpeg is Playwright's own
+build, which `rpc install` already downloads next to Chromium. It writes
+VP9 webm and PNG but has no H.264 encoder, which is why webm is the default
+and mp4 needs a system ffmpeg. If Playwright's build is missing, rpc falls
+back to `ffmpeg` on PATH. GIFs are encoded in Node (`src/gif.ts`) from PNG
+frames that ffmpeg decodes out of the webm, so they add no dependency.
+`rpc doctor` says which ffmpeg it found and whether mp4 will work.
+
 ## MCP server
 
-`rpc mcp` runs an MCP server on stdio with four tools.
+`rpc mcp` runs an MCP server on stdio with five tools.
 
 ### `screenshot`
 
@@ -539,6 +689,8 @@ changed and fix every error. Fix the warnings too, or say why one doesn't apply.
 | `sliceWidth` | 768 | full page: max slice width in px (raise it for small text on desktop) |
 | `maxHeight` | 60000 | full page: CSS px cap |
 | `reducedMotion` | false | emulate `prefers-reduced-motion: reduce` |
+| `finishAnimations` | false | jump animations (Web Animations, GSAP on `window`) to their end first |
+| `unpin` | true | full page: collapse pinned sections so each shows once |
 | `waitFor`, `waitMs`, `colorScheme`, `outDir`, `timeoutMs` | | as in the CLI |
 | `inline` | true | return images, not just paths |
 | `cookies` | | `[{ name, value, domain?, path? }]`, set on the target origin |
@@ -550,7 +702,10 @@ changed and fix every error. Fix the warnings too, or say why one doesn't apply.
 The result starts with a plain-text block: one line per device (or the error
 and hint), followed by the JSON summary (file paths, pixel sizes,
 `scrollHeight`, `capturedHeight`, `segments`, `clipped`, `slices`, HTTP status,
-final URL, title, console errors, `error`/`code`/`hint`).
+final URL, title, console errors, `motion`, `warnings`, `error`/`code`/`hint`).
+Each motion warning also gets its own line under its device, followed by
+the fix, like ``WARN [motion-carousel] carousel: use `rpc record` for motion
+at #carousel``.
 
 Then the images:
 
@@ -596,6 +751,27 @@ then one line per error and warning with its id and selector, like
 The second is the JSON report described under [JSON report](#json-report).
 The call is a tool error only when the page failed to load on every device;
 findings, even errors, come back as a normal result for the agent to act on.
+
+### `record`
+
+Runs [`rpc record`](#recording-motion-rpc-record) on one URL.
+
+| Param | Default | |
+| --- | --- | --- |
+| `url` | required | http(s), file, bare host or local path |
+| `device` | `desktop-1440` | one id or alias |
+| `selector` | whole viewport | CSS selector of the element to record |
+| `duration` | 5 | seconds, 0.5 to 30 |
+| `gif` | false | also write a GIF |
+| `mp4` | false | also write an mp4, when a system ffmpeg has H.264 |
+| `reducedMotion`, `waitFor`, `waitMs`, `colorScheme`, `outDir`, `timeoutMs` | | as for `screenshot` |
+| `cookies`, `headers`, `storageState`, `useSession`, `allowOrigins` | | as for `screenshot` |
+
+The result starts with a summary line (`ok iphone-15 #carousel: 3s webm
+1080x600 at 25 fps <path>`, then the poster, GIF and mp4 paths) and the
+JSON result. The poster comes back inline as a JPEG, so the agent can see
+what it recorded. An element that isn't there is a tool error with the code
+`SELECTOR_NOT_FOUND`.
 
 ### `list_devices`
 
@@ -703,10 +879,19 @@ from the `skills` CLI, are in `docs/cli-design.md`.
 - Chromium only, portrait only. There is no landscape mode, and none of RPC's
   fake browser chrome bars.
 - Scroll-driven animations are captured in their scroll-top state. Entrance
-  animations that run once are usually fine after the warm-up scroll; ones
+  animations that run once are fine after the warm-up scroll and settle. Ones
   that reverse when scrolled back (GSAP `toggleActions` with reverse, scrubbed
-  timelines) may show their initial state. `reducedMotion` helps on sites that
-  respect it.
+  timelines) may show their initial state, and a collapsed pin shows its
+  section's first frame. `--finish-animations` only reaches GSAP when it's on
+  `window`; GSAP bundled into the app's JavaScript isn't, so its tweens stay
+  as they are. `--reduced-motion` helps on sites that respect it.
+- Pins are found by GSAP's `.pin-spacer` class, `ScrollTrigger.getAll()`, and
+  sticky or fixed sections that are the only child of a tall parent. A pin
+  built some other way is still captured with its blank spacer.
+- `rpc record` records what the page does on its own. It doesn't scroll or
+  click, so a scrubbed section only moves if something else moves it. Frames
+  come at the screenshot rate (about 30 fps on high-DPR phones), and the
+  webm repeats frames to hold 25 fps.
 - Very tall stitched PNGs are big files; review them through the slices.
 - The bezel geometry is RPC's, unchanged. On kind-default phones the page
   covers the dynamic island or notch, and generic monitors are drawn edge to
