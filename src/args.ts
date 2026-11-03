@@ -78,6 +78,10 @@ Shot options:
       --slice-width <px>     max slice width (default: 768)
       --max-height <px>      full-page cap in CSS px (default: 60000)
       --reduced-motion       emulate prefers-reduced-motion: reduce
+      --finish-animations    jump animations (CSS, Web Animations, GSAP) to
+                             their end before capturing
+      --no-unpin             with --full-page: keep pinned sections as they
+                             are (default: collapse each to its section)
   -o, --out <dir>            output directory (default: ./.rpc-shots)
       --wait-for <selector>  wait for a CSS selector before capturing
       --wait <ms>            extra settle delay after load (default: 0)
@@ -174,6 +178,8 @@ function parseShot(args: string[]): Command {
       'slice-width': { type: 'string' },
       'max-height': { type: 'string' },
       'reduced-motion': { type: 'boolean' },
+      'finish-animations': { type: 'boolean' },
+      'no-unpin': { type: 'boolean' },
       json: { type: 'boolean' },
       open: { type: 'boolean' },
       ...AUTH_FLAGS,
@@ -202,6 +208,8 @@ function parseShot(args: string[]): Command {
   if (values['no-emulate']) options.emulate = false;
   if (values.slices) options.saveSlices = true;
   if (values['reduced-motion']) options.reducedMotion = true;
+  if (values['finish-animations']) options.finishAnimations = true;
+  if (values['no-unpin']) options.unpin = false;
   if (typeof values['slice-width'] === 'string') {
     options.sliceWidth = parseInt_('--slice-width', values['slice-width'], 256, 4096);
   }

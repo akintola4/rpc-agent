@@ -8,6 +8,7 @@ import { capture, type DeviceShot } from './capture.js';
 import { checkExitCode, runCheck, summaryLine, type CheckReport } from './check.js';
 import { deviceLine, plainReport } from './check-format.js';
 import { CATEGORY_LABELS, CATEGORY_ORDER, DEVICE_ALIASES, DEVICES } from './devices.js';
+import { unpinnedLines, warningWhere } from './motion.js';
 import { currentMode, openPath, waitForEnter } from './term.js';
 
 /** Plain-output colours: identity unless FORCE_COLOR asks for colour. */
@@ -246,6 +247,11 @@ function printShot(s: DeviceShot): void {
     lines.push(`   ${first.replace(/-slice-\d+\.jpg$/, '-slice-NN.jpg')}  ${s.slices.total} slice(s), ${s.slices.items[0].width}px wide`);
   }
   if (s.consoleErrors?.length) lines.push(`   ${s.consoleErrors.length} console error(s), first: ${s.consoleErrors[0]}`);
+  for (const u of unpinnedLines(s.motion?.unpinned)) lines.push(`   unpinned ${u}`);
+  for (const w of s.warnings ?? []) {
+    const where = warningWhere(w);
+    lines.push(`   ${paint.warn('warn:')} ${w.message}${where ? `: ${where}` : ''}`);
+  }
   console.log(lines.join('\n'));
 }
 

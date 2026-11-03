@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rpc motion fixture: static</title>
+<style>
+  /* No animations, pins, reveals or carousels: no Motion findings. A sticky
+     header (small, so not a pinned section), a hover transition that never
+     runs, an opacity-0 dropdown with no reveal pattern, and a horizontally
+     scrollable table without scroll-snap. */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #fff; font: 18px/1.5 system-ui, sans-serif; }
+  header { position: sticky; top: 0; height: 56px; padding: 0 16px; display: flex; align-items: center; background: #111; color: #fff; }
+  main { padding: 24px; }
+  a { transition: color 0.2s; }
+  a:hover { color: rgb(200, 0, 0); }
+  .menu { opacity: 0; pointer-events: none; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 900px; border-collapse: collapse; }
+  td { border: 1px solid #ccc; padding: 8px; }
+  .block { height: 1200px; background: rgb(240, 240, 240); margin-top: 24px; }
+</style>
+</head>
+<body>
+<header>Static</header>
+<main>
+  <p>A page without motion. <a href="#">A link</a>.</p>
+  <ul class="menu"><li>Hidden dropdown item</li></ul>
+  <div class="table-wrap"><table><tr><td>One</td><td>Two</td><td>Three</td><td>Four</td></tr></table></div>
+  <div class="block">Tall block</div>
+</main>
+</body>
+</html>

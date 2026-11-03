@@ -22,6 +22,10 @@ export interface ShotOptions {
   emulate: boolean;
   /** Emulate prefers-reduced-motion: reduce. */
   reducedMotion: boolean;
+  /** Jump finite Web Animations (and GSAP, when it is on window) to their end before capture. */
+  finishAnimations: boolean;
+  /** Full page: collapse pinned sections so each shows once instead of over a blank spacer. */
+  unpin: boolean;
   /** Full-page cap in CSS px; taller pages are cut off and marked clipped. */
   maxHeight: number;
   /**
@@ -54,6 +58,8 @@ export function defaultShotOptions(url: string): ShotOptions {
     timeoutMs: DEFAULT_TIMEOUT_MS,
     emulate: true,
     reducedMotion: false,
+    finishAnimations: false,
+    unpin: true,
     maxHeight: DEFAULT_MAX_HEIGHT,
     maxSlices: DEFAULT_MAX_SLICES,
     sliceWidth: DEFAULT_SLICE_WIDTH,

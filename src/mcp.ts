@@ -27,6 +27,7 @@ import {
   type CheckOptions,
   type ShotOptions,
 } from './options.js';
+import { unpinnedLines, warningWhere } from './motion.js';
 import { DEFAULT_MAX_HEIGHT } from './slices.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -84,6 +85,20 @@ const screenshotInput = {
     .boolean()
     .optional()
     .describe('Emulate prefers-reduced-motion: reduce. Helps when scroll-triggered entrance animations (GSAP, Framer Motion) leave sections blank.'),
+  finishAnimations: z
+    .boolean()
+    .optional()
+    .describe(
+      'Jump finite CSS/Web Animations to their end before capture, and GSAP tweens when gsap/ScrollTrigger are on window ' +
+        '(scrubbed and pinned ones keep their scroll position). Use it when the result warns that elements were still animating. Default false.'
+    ),
+  unpin: z
+    .boolean()
+    .optional()
+    .describe(
+      'Full page: collapse pinned (GSAP ScrollTrigger-style or sticky) sections so each shows once instead of over a tall blank spacer. ' +
+        'Listed under motion.unpinned. Default true.'
+    ),
   waitFor: z.string().optional().describe('CSS selector to wait for (visible) before capturing.'),
   waitMs: z.number().int().min(0).max(30_000).optional().describe('Extra settle delay after load, in ms.'),
   colorScheme: z.enum(COLOR_SCHEMES as [string, ...string[]]).optional().describe('Emulate prefers-color-scheme.'),
@@ -201,6 +216,8 @@ export function createServer(): McpServer {
           timeoutMs: args.timeoutMs ?? DEFAULT_TIMEOUT_MS,
           emulate: true,
           reducedMotion: args.reducedMotion ?? false,
+          finishAnimations: args.finishAnimations ?? false,
+          unpin: args.unpin ?? true,
           maxHeight: args.maxHeight ?? DEFAULT_MAX_HEIGHT,
           saveSlices: args.saveSlices,
           maxSlices: args.maxSlices ?? DEFAULT_MAX_SLICES,
@@ -412,8 +429,15 @@ export function headline(
       continue;
     }
     const size = s.shot ? `${s.shot.width}x${s.shot.height}px` : '';
+    const motion = [
+      ...unpinnedLines(s.motion?.unpinned).map(u => `  unpinned: ${u}`),
+      ...(s.warnings ?? []).map(w => {
+        const where = warningWhere(w);
+        return `  WARN [${w.id}] ${w.message}${where ? ` at ${where}` : ''}\n    fix: ${w.fix}`;
+      }),
+    ];
     if (!options.fullPage) {
-      lines.push(`ok ${s.device}: ${size}${s.shot ? ` ${s.shot.path}` : ''}`);
+      lines.push(`ok ${s.device}: ${size}${s.shot ? ` ${s.shot.path}` : ''}`, ...motion);
       continue;
     }
     const parts = [
@@ -444,7 +468,7 @@ export function headline(
         parts.push(`  full PNG: ${s.shot ? s.shot.path : ''}`);
       }
     }
-    lines.push(parts.join('\n'));
+    lines.push(parts.join('\n'), ...motion);
   }
   return lines.join('\n');
 }

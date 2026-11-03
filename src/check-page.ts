@@ -3,7 +3,7 @@
 // `__name()` helper that doesn't exist inside the page.
 
 /** Shared helpers: a short unique selector, rendering tests and accessible names. */
-const HELPERS = `
+export const HELPERS = `
   const esc = s => (window.CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/[^\\w-]/g, '\\\\$&'));
   const uniq = s => { try { return document.querySelectorAll(s).length === 1; } catch (e) { return false; } };
   const sel = el => {

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rpc motion fixture: carousel</title>
+<style>
+  /* #carousel: a 360x200 CSS px scroll-snap track at (16, 600) with four
+     slides in different colours. It advances one slide every 600 ms and
+     wraps, like an autoplaying hero carousel. 600px of copy above it, so
+     `--selector` has to scroll it into view on a phone. */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #fff; font: 20px/1.4 system-ui, sans-serif; }
+  .intro { height: 600px; padding: 24px; }
+  #carousel {
+    display: flex; width: 360px; height: 200px; margin: 0 16px 600px;
+    overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none;
+  }
+  .slide { flex: 0 0 100%; scroll-snap-align: start; padding: 16px; color: #fff; font-size: 32px; font-weight: 700; }
+  .slide:nth-child(1) { background: rgb(0, 90, 255); }
+  .slide:nth-child(2) { background: rgb(0, 170, 60); }
+  .slide:nth-child(3) { background: rgb(255, 140, 0); }
+  .slide:nth-child(4) { background: rgb(200, 0, 120); }
+</style>
+</head>
+<body>
+<div class="intro">Carousel below</div>
+<div id="carousel" aria-label="Featured">
+  <div class="slide">Slide 1</div>
+  <div class="slide">Slide 2</div>
+  <div class="slide">Slide 3</div>
+  <div class="slide">Slide 4</div>
+</div>
+<script>
+  const track = document.getElementById('carousel');
+  let i = 0;
+  setInterval(() => {
+    i = (i + 1) % track.children.length;
+    track.scrollTo({ left: i * track.clientWidth, behavior: 'instant' });
+  }, 600);
+</script>
+</body>
+</html>

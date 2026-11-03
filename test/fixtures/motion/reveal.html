@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rpc motion fixture: reveal on scroll</title>
+<style>
+  /* Six .reveal blocks (600x120 CSS px, rgb(20,40,160)) on white: three at
+     y=40/200/360, three at y=2000/2160/2320. Each starts at opacity 0,
+     40px low; an IntersectionObserver starts a tween to opacity 1 at its
+     place when it enters the viewport (0.9 s, staggered 0.25 s; 6 s with
+     ?slow, longer than the settle cap; ?stuck never starts them). Once
+     revealed, a block stays. */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #fff; font: 20px/1.4 system-ui, sans-serif; }
+  main { position: relative; height: 2840px; }
+  .reveal {
+    position: absolute; left: 40px; width: 600px; max-width: calc(100% - 80px); height: 120px;
+    padding: 16px; background: rgb(20, 40, 160); color: #fff; font-weight: 700;
+  }
+</style>
+<script src="tween.js"></script>
+</head>
+<body>
+<main>
+  <div class="reveal" style="top: 40px">One</div>
+  <div class="reveal" style="top: 200px">Two</div>
+  <div class="reveal" style="top: 360px">Three</div>
+  <div class="reveal" style="top: 2000px">Four</div>
+  <div class="reveal" style="top: 2160px">Five</div>
+  <div class="reveal" style="top: 2320px">Six</div>
+</main>
+<script>
+  const slow = location.search.includes('slow');
+  // ?stuck: the observer never fires the tweens, like a reveal whose trigger never matches.
+  const stuck = location.search.includes('stuck');
+  const blocks = Array.from(document.querySelectorAll('.reveal'));
+  for (const el of blocks) { el.style.opacity = '0'; el.style.transform = 'translate(0px, 40px)'; }
+  const io = new IntersectionObserver(entries => {
+    const seen = entries.filter(e => e.isIntersecting);
+    if (stuck) return;
+    seen.forEach((e, i) => {
+      io.unobserve(e.target);
+      gsap.fromTo(e.target, { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: slow ? 6 : 0.9, delay: i * 0.25 });
+    });
+  });
+  blocks.forEach(el => io.observe(el));
+</script>
+</body>
+</html>

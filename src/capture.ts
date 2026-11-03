@@ -14,6 +14,18 @@ import { launchBrowser } from './browser.js';
 import { renderFramed, renderSlices, type Segment } from './composite.js';
 import { explainError } from './errors.js';
 import { emulationFor, resolveDevices, type Device } from './devices.js';
+import {
+  detectMotion,
+  finishAnimations,
+  settleMotion,
+  shotWarnings,
+  unpin,
+  warmUpScrollJs,
+  type FinishResult,
+  type MotionFinding,
+  type SettleResult,
+  type UnpinResult,
+} from './motion.js';
 import type { ShotOptions } from './options.js';
 import { pngSize, stitchPngs } from './png.js';
 import { fitsOneCapture, planSegments, planSlices, sliceScale, type SliceSpec } from './slices.js';
@@ -51,6 +63,14 @@ export interface DeviceShot {
   title?: string;
   /** Uncaught exceptions and console.error lines, deduped, max 20. */
   consoleErrors?: string[];
+  /** How the page was settled, skipped ahead and unpinned before capture. */
+  motion?: MotionMeta;
+  /**
+   * Where the capture differs from what a person scrolling sees: elements
+   * still animating, pinned sections left in place, hidden reveals,
+   * carousels. Present only when there is something to say.
+   */
+  warnings?: MotionFinding[];
   /** One-line failure message (navigation, wait or capture). */
   error?: string;
   /** Machine-readable failure code: `ERR_NAME_NOT_RESOLVED`, `TIMEOUT`, ... */
@@ -59,6 +79,17 @@ export interface DeviceShot {
   hint?: string;
   /** In-memory buffers for callers that want them (MCP previews). */
   buffers?: { shot?: Buffer; framed?: Buffer; slices?: Buffer[] };
+}
+
+export interface MotionMeta {
+  /** The final wait before capture (see motion.ts). */
+  settle: SettleResult;
+  /** Full page: the warm-up scroll's settle steps. */
+  warmUp?: { steps: number; settled: number; ms: number };
+  /** --finish-animations: what was sent to its end. */
+  finished?: FinishResult;
+  /** Full page: pinned sections collapsed so each shows once (off with --no-unpin). */
+  unpinned?: UnpinResult[];
 }
 
 export interface SliceInfo extends SliceSpec {
@@ -232,16 +263,30 @@ async function captureDevice(
         throw err;
       }
     }
+    let warmUp: MotionMeta['warmUp'];
     if (opts.fullPage) {
-      await warmUpScroll(page, opts.maxHeight);
+      warmUp = await warmUpScroll(page, opts.maxHeight);
       await settle(page, opts.timeoutMs);
     }
+    const finished = opts.finishAnimations ? await finishAnimations(page) : undefined;
+    // Collapse pins before measuring, so the stitched height is the unpinned one.
+    const unpinned = opts.fullPage && opts.unpin ? await unpin(page) : [];
     if (opts.waitMs > 0) await page.waitForTimeout(opts.waitMs);
+    const motion: MotionMeta = { settle: await settleMotion(page) };
+    if (warmUp) motion.warmUp = warmUp;
+    if (finished) motion.finished = finished;
+    if (unpinned.length) motion.unpinned = unpinned;
+    result.motion = motion;
     checkLogin();
 
     result.finalUrl = page.url();
     result.title = await page.title();
     result.scrollHeight = await page.evaluate<number>(SCROLL_HEIGHT_JS);
+    const warnings = shotWarnings(await detectMotion(page, opts.fullPage ? 'page' : 'viewport'), motion.settle, {
+      fullPage: opts.fullPage,
+      unpinned,
+    });
+    if (warnings.length) result.warnings = warnings;
 
     const base = fileStem(opts.url, device.id);
     const shotOpts = { animations: 'disabled', caret: 'hide', type: 'png' } as const;
@@ -349,27 +394,6 @@ const WAIT_FOR_ASSETS_JS = `(async () => {
   ]);
 })()`;
 
-/**
- * Walk the page one viewport at a time so loading="lazy" images and
- * IntersectionObserver-driven content render, then return to the top.
- * Replaces the 120 ms per-segment pause in RPC's scroll-and-stitch.
- * Bounded to 100 steps and the full-page height cap.
- */
-const warmUpScrollJs = (maxHeight: number) => `(async () => {
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const root = document.scrollingElement || document.documentElement;
-  const step = Math.max(200, Math.floor(window.innerHeight * 0.9));
-  for (let i = 0, y = 0; i < 100 && y < ${maxHeight}; i++, y += step) {
-    if (y > root.scrollHeight - window.innerHeight) break;
-    window.scrollTo({ top: y, behavior: 'instant' });
-    await sleep(100);
-  }
-  window.scrollTo({ top: Math.min(root.scrollHeight, ${maxHeight}), behavior: 'instant' });
-  await sleep(150);
-  window.scrollTo({ top: 0, behavior: 'instant' });
-  await sleep(150);
-})()`;
-
 const SCROLL_WIDTH_JS = `Math.max(document.documentElement.scrollWidth, document.body ? document.body.scrollWidth : 0)`;
 
 const SCROLL_HEIGHT_JS = `Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)`;
@@ -385,8 +409,8 @@ export async function settle(page: Page, timeoutMs: number): Promise<void> {
   await page.evaluate(WAIT_FOR_ASSETS_JS).catch(() => {});
 }
 
-async function warmUpScroll(page: Page, maxHeight: number): Promise<void> {
-  await page.evaluate(warmUpScrollJs(Math.round(maxHeight)));
+async function warmUpScroll(page: Page, maxHeight: number): Promise<NonNullable<MotionMeta['warmUp']>> {
+  return (await page.evaluate(warmUpScrollJs(Math.round(maxHeight)))) as NonNullable<MotionMeta['warmUp']>;
 }
 
 /** `<host>[-<path>]-<device>`, e.g. `localhost-3000-about-iphone-15`. */

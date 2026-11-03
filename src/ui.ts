@@ -28,6 +28,7 @@ import {
   type Device,
   type DeviceCategory,
 } from './devices.js';
+import { unpinnedLines, warningWhere } from './motion.js';
 import { defaultShotOptions, normalizeUrl, type CheckOptions, type ShotOptions } from './options.js';
 import { openCommand, openPath, waitForEnter } from './term.js';
 
@@ -122,6 +123,8 @@ export function shotCommand(o: ShotOptions): string {
   if (o.fullPage) parts.push('--full-page');
   if (o.colorScheme) parts.push('--color-scheme', o.colorScheme);
   if (o.reducedMotion) parts.push('--reduced-motion');
+  if (o.finishAnimations) parts.push('--finish-animations');
+  if (o.fullPage && !o.unpin) parts.push('--no-unpin');
   if (o.outDir !== base.outDir) parts.push('-o', quote(o.outDir));
   return parts.join(' ');
 }
@@ -226,6 +229,8 @@ export function summaryLines(o: ShotOptions, c: Colors, auth?: AuthSummary): str
     ['colour scheme', o.colorScheme ?? c.dim('default')],
   ];
   if (o.reducedMotion) rows.push(['reduced motion', c.green('yes')]);
+  if (o.finishAnimations) rows.push(['finish animations', c.green('yes')]);
+  if (o.fullPage && !o.unpin) rows.push(['unpin', c.yellow('no')]);
   if (o.waitFor) rows.push(['wait for', o.waitFor]);
   if (!o.emulate) rows.push(['emulation', c.yellow('viewport + DPR only')]);
   if (auth) rows.push(...authRows(auth, c));
@@ -321,6 +326,11 @@ export function capturedLines(result: ShotResult, c: Colors): string[] {
     if (s.consoleErrors?.length) {
       const msg = s.consoleErrors[0]!.length > width - 20 ? `${s.consoleErrors[0]!.slice(0, width - 21)}…` : s.consoleErrors[0]!;
       out.push(`    ${c.yellow('console:')} ${c.dim(msg)}`);
+    }
+    for (const u of unpinnedLines(s.motion?.unpinned)) out.push(`    ${c.cyan('unpinned')} ${c.dim(u)}`);
+    for (const w of s.warnings ?? []) {
+      const where = warningWhere(w);
+      out.push(`    ${c.yellow('▲')} ${w.message}${where ? `  ${c.dim(where)}` : ''}`);
     }
   }
   for (const group of failures.values()) {

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rpc motion fixture: pinned section</title>
+<style>
+  /* Layout (CSS px): #intro 800 rgb(0,90,255), then a pin spacer holding
+     #pinned (700, rgb(255,140,0)) with 2100 of padding below it, then
+     #outro 800 rgb(0,170,60). The page background is white, so a full-page
+     capture at scroll 0 shows a 2100px white band under the section unless
+     the spacer is collapsed. Unpinned the page is 2300 tall. Inside the
+     section a three-panel track slides with the pin's progress (scrubbed),
+     panel 1 (orange) showing at the start. */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #fff; font: 20px/1.4 system-ui, sans-serif; }
+  section { height: 800px; padding: 24px; color: #fff; }
+  #intro { background: rgb(0, 90, 255); }
+  #outro { background: rgb(0, 170, 60); }
+  #pinned { height: 700px; overflow: hidden; background: rgb(255, 140, 0); }
+  .track { display: flex; width: 300%; height: 100%; }
+  .panel { width: 33.3333%; height: 100%; padding: 24px; font-size: 32px; font-weight: 700; }
+  .panel:nth-child(1) { background: rgb(255, 140, 0); }
+  .panel:nth-child(2) { background: rgb(200, 0, 120); }
+  .panel:nth-child(3) { background: rgb(120, 0, 200); }
+</style>
+<script src="tween.js"></script>
+</head>
+<body>
+<section id="intro">Intro</section>
+<div id="pinned"><div class="track"><div class="panel">Panel 1</div><div class="panel">Panel 2</div><div class="panel">Panel 3</div></div></div>
+<section id="outro">Outro</section>
+<script>
+  const track = document.querySelector('.track');
+  ScrollTrigger.create({
+    trigger: document.getElementById('pinned'),
+    pin: true,
+    scrub: true,
+    distance: 2100,
+    onUpdate: p => { track.style.transform = 'translateX(' + (-p * 66.6667) + '%)'; },
+  });
+</script>
+</body>
+</html>
