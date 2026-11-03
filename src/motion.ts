@@ -79,14 +79,19 @@ export const STEP_CAP_MS = 800;
 export const WARM_UP_BUDGET_MS = 8000;
 
 /**
- * `__rpcSettle(quiet, cap)`: resolves when no finite animation on the
- * document timeline runs on a visible element and no `style`/`class`
- * attribute on a visible element changed for `quiet` ms, or at `cap` ms.
- * Elements still changing at the cap are remembered as loops (a JS marquee,
- * a ticker) and don't hold up later calls on the same page.
+ * `__rpcSettle(quiet, cap, waapi)`: resolves when no `style`/`class`
+ * attribute on a visible element changed for `quiet` ms and (with `waapi`)
+ * no finite animation on the document timeline runs on a visible element,
+ * or at `cap` ms. Elements still changing or animating at the cap are
+ * remembered as loops (a JS marquee, a ticker, a long CSS animation) and
+ * don't hold up later calls on the same page.
+ *
+ * `waapi` false is for the last wait before a screenshot: Playwright's
+ * `animations: 'disabled'` already ends finite CSS and Web Animations in the
+ * image, so only JS-driven changes (GSAP-style tweens) can be caught mid-way.
  */
 const SETTLE_FN = `
-  const __rpcSettle = async (quiet, cap) => {
+  const __rpcSettle = async (quiet, cap, waapi = true) => {
     const loops = (window.__rpcLoops = window.__rpcLoops || new WeakSet());
     const start = performance.now();
     const vw = window.innerWidth;
@@ -107,8 +112,8 @@ const SETTLE_FN = `
       }
     });
     mo.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
-    const running = () => (document.getAnimations ? document.getAnimations() : []).filter(a => {
-      if (a.playState !== 'running' || (a.timeline && a.timeline !== document.timeline)) return false;
+    const running = () => (waapi && document.getAnimations ? document.getAnimations() : []).filter(a => {
+      if (a.playState !== 'running' || loops.has(a.effect && a.effect.target) || (a.timeline && a.timeline !== document.timeline)) return false;
       const t = a.effect && a.effect.getComputedTiming ? a.effect.getComputedTiming() : null;
       return Boolean(t) && t.endTime !== Infinity && visible(a.effect.target);
     });
@@ -132,10 +137,10 @@ const SETTLE_FN = `
 `;
 
 /** Settle at the current scroll position (see SETTLE_FN). */
-export const settleJs = (quiet = SETTLE_QUIET_MS, cap = SETTLE_CAP_MS) => `(async () => {
+export const settleJs = (quiet = SETTLE_QUIET_MS, cap = SETTLE_CAP_MS, waapi = true) => `(async () => {
   ${HELPERS}
   ${SETTLE_FN}
-  const r = await __rpcSettle(${quiet}, ${cap});
+  const r = await __rpcSettle(${quiet}, ${cap}, ${waapi});
   return { settled: r.settled, ms: r.ms, active: r.active.slice(0, 20).map(sel), count: r.active.length };
 })()`;
 
@@ -175,8 +180,8 @@ export const warmUpScrollJs = (maxHeight: number) => `(async () => {
 
 /**
  * Pinned sections: `.pin-spacer` wrappers (GSAP ScrollTrigger), pins
- * ScrollTrigger reports, and sticky or fixed sections (half a viewport or
- * more) that are the only child of a parent at least half a viewport
+ * ScrollTrigger reports (when the pin is its parent's only child), and
+ * sticky or fixed sections (half a viewport or more) that are the only child of a parent at least half a viewport
  * taller. Sets `pins` to `{ el, spacer, kind }`.
  */
 const PINS_FN = `
@@ -200,7 +205,9 @@ const PINS_FN = `
       if (ST && typeof ST.getAll === 'function') {
         for (const st of ST.getAll()) {
           const el = st && st.pin;
-          if (el && el.nodeType === 1 && el.parentElement && h(el.parentElement) - h(el) >= vh / 4) add(el, el.parentElement, 'scrolltrigger');
+          const parent = el && el.nodeType === 1 ? el.parentElement : null;
+          // Only a wrapper that holds just the pin: collapsing a shared parent (<main>) would move everything in it.
+          if (parent && parent.children.length === 1 && h(parent) - h(el) >= vh / 4) add(el, parent, 'scrolltrigger');
         }
       }
     } catch (e) {}
@@ -249,10 +256,24 @@ export const motionJs = (scope: 'viewport' | 'page') => `(async () => {
   }));
 
   // Reveals: hidden or offset, and marked as animated content by a class,
-  // a data attribute or inline styles a library wrote.
-  const REVEAL_CLASS = /(^|[\\s_-])(reveal|reveals|fade|fade-in|fadein|aos|appear|animate|animated|animation|inview|in-view|is-visible|visible|scroll|motion|enter|wow|sal|slide-in|observe|observed)([\\s_-]|$)/i;
+  // a data attribute or inline styles a library wrote. Class tokens are the
+  // reveal libraries' own (AOS, WOW, sal, animate.css) and plain reveal or
+  // fade names; generic words such as scroll, visible, motion or animate
+  // would match utility classes (overflow-x-scroll, motion-safe:, animate-spin).
+  const REVEAL_CLASS = /(^|[\\s_-])(reveal|reveals|fade|fade-in|fadein|aos|aos-init|aos-animate|appear|animated|inview|in-view|wow|sal|slide-in)([\\s_-]|$)/i;
   const REVEAL_ATTRS = ['data-aos', 'data-sal', 'data-scroll', 'data-animate', 'data-animation', 'data-reveal', 'data-motion', 'data-inview', 'data-in-view', 'data-framer-appear-id'];
   const LIB_STYLE = /opacity|transform|translate|scale|visibility/i;
+  // Carousel and slider tracks are moved by transforms on purpose; their offset is the current slide, not a reveal.
+  const LIBS = [['.swiper', 'Swiper'], ['.swiper-container', 'Swiper'], ['.embla', 'Embla'], ['.splide', 'Splide'], ['.keen-slider', 'Keen'], ['.flickity-enabled', 'Flickity'], ['.slick-slider', 'Slick'], ['.glide', 'Glide'], ['[aria-roledescription="carousel"]', 'carousel']];
+  const LIB_ROOTS = LIBS.map(([s]) => s).join(', ');
+  const isTrack = el => {
+    const p = el.parentElement;
+    return Boolean(p && p !== document.body && el.offsetWidth > p.clientWidth + 1 && getComputedStyle(p).overflowX !== 'visible');
+  };
+  // One axis of a translate, in px: percentages are of the element's own size.
+  const lengthPx = (v, size) => (v && v.endsWith('%') ? (parseFloat(v) / 100) * size : parseFloat(v) || 0);
+  // A translate of minus half the element's own size is centring (left: 50%; translate(-50%)), not an offset.
+  const offsetOf = (v, size) => (Math.abs(v + size / 2) <= 1 ? 0 : Math.abs(v));
   const hidden = [];
   const hiddenEls = [];
   for (const el of document.body ? document.body.querySelectorAll('*') : []) {
@@ -263,11 +284,16 @@ export const motionJs = (scope: 'viewport' | 'page') => `(async () => {
     if (el.closest('[aria-hidden="true"], [inert], [hidden], dialog:not([open])')) continue;
     const cs = getComputedStyle(el);
     if (cs.position === 'fixed') continue;
+    if (el.closest(LIB_ROOTS)) continue;
     const opacity = parseFloat(cs.opacity);
     const m = cs.transform && cs.transform !== 'none' ? new DOMMatrixReadOnly(cs.transform) : null;
-    let offset = m ? Math.max(Math.abs(m.m41), Math.abs(m.m42)) : 0;
+    const w = el.offsetWidth || r.width;
+    const ht = el.offsetHeight || r.height;
+    const [tx, ty] = cs.translate && cs.translate !== 'none' ? cs.translate.split(/\\s+/) : [];
+    const dx = (m ? m.m41 : 0) + lengthPx(tx, w);
+    const dy = (m ? m.m42 : 0) + lengthPx(ty, ht);
+    const offset = isTrack(el) ? 0 : Math.max(offsetOf(dx, w), offsetOf(dy, ht));
     let scale = m ? Math.hypot(m.a, m.b) : 1;
-    if (cs.translate && cs.translate !== 'none') offset = Math.max(offset, ...cs.translate.split(/\\s+/).map(v => Math.abs(parseFloat(v)) || 0));
     if (cs.scale && cs.scale !== 'none') scale = Math.min(scale, parseFloat(cs.scale) || 1);
     const faded = opacity < 0.1 || cs.visibility === 'hidden';
     const moved = offset >= 24 || scale < 0.85;
@@ -283,7 +309,6 @@ export const motionJs = (scope: 'viewport' | 'page') => `(async () => {
   }
 
   // Carousels: library roots, horizontal scroll-snap, and tracks seen moving.
-  const LIBS = [['.swiper', 'Swiper'], ['.swiper-container', 'Swiper'], ['.embla', 'Embla'], ['.splide', 'Splide'], ['.keen-slider', 'Keen'], ['.flickity-enabled', 'Flickity'], ['.slick-slider', 'Slick'], ['.glide', 'Glide'], ['[aria-roledescription="carousel"]', 'carousel']];
   const found = new Map();
   const note = (el, key, value) => found.set(el, Object.assign(found.get(el) || {}, { [key]: value }));
   for (const [s, name] of LIBS) {
@@ -399,8 +424,17 @@ export const UNPIN_JS = `(() => {
   return out.map((o, i) => ({ ...o, removed: Math.max(0, Math.round(before[i] - height(pins[i].spacer))) }));
 })()`;
 
-export async function settleMotion(page: Page, quiet = SETTLE_QUIET_MS, cap = SETTLE_CAP_MS): Promise<SettleResult> {
-  return (await page.evaluate(settleJs(quiet, cap))) as SettleResult;
+/**
+ * Wait for the page to stop moving. `waapi: false` ignores CSS and Web
+ * Animations (for the wait before a screenshot, which ends them itself).
+ */
+export async function settleMotion(
+  page: Page,
+  quiet = SETTLE_QUIET_MS,
+  cap = SETTLE_CAP_MS,
+  { waapi = true }: { waapi?: boolean } = {}
+): Promise<SettleResult> {
+  return (await page.evaluate(settleJs(quiet, cap, waapi))) as SettleResult;
 }
 
 export async function detectMotion(page: Page, scope: 'viewport' | 'page'): Promise<MotionData> {

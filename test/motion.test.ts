@@ -17,6 +17,7 @@ import { buildPalette, encodeGif, gifWriter, lzw } from '../src/gif.js';
 import { createServer as createMcpServer } from '../src/mcp.js';
 import { defaultCheckOptions, defaultRecordOptions, defaultShotOptions, type RecordOptions, type ShotOptions } from '../src/options.js';
 import { decodePng, imageSize, type RawImage } from '../src/png.js';
+import { SETTLE_CAP_MS, unpin } from '../src/motion.js';
 import { encodeFrames, GIF_FPS, record, RecordError, recordStem } from '../src/record.js';
 import { failFast } from './serve.js';
 
@@ -126,20 +127,33 @@ describe('rpc check: Motion group', () => {
 });
 
 describe('rpc shot: motion warnings', () => {
-  it('warns about animations still running, carousels and kept pins', async () => {
-    const kf = await shot('keyframes.html');
-    expect(kf.warnings![0]).toMatchObject({ id: 'motion-running', message: '1 element was still animating when captured', items: [{ selector: 'h1.hero-title' }] });
+  it('warns about carousels and kept pins', async () => {
     expect((await shot('carousel.html')).warnings).toEqual([expect.objectContaining({ id: 'motion-carousel', message: 'carousel: use `rpc record` for motion' })]);
     const kept = await shot('pinned.html', { fullPage: true, unpin: false });
     expect(kept.warnings).toEqual([expect.objectContaining({ id: 'motion-pinned', message: 'pinned section: the stitched shot may show blank space' })]);
     expect(warningIds(await shot('reveal.html?stuck'))).toEqual(['motion-reveal-hidden']);
   });
 
+  it('does not warn about a CSS animation the screenshot ends itself', async () => {
+    // animations: 'disabled' fast-forwards finite CSS animations, so the PNG shows the end state without --finish-animations.
+    const kf = await shot('keyframes.html');
+    expect(warningIds(kf)).not.toContain('motion-running');
+    expect(kf.motion!.settle).toMatchObject({ settled: true, count: 0 });
+    expect(pixels(kf.buffers!.shot!).at(60, 100)).toEqual([200, 0, 0]);
+  });
+
+  it('a long CSS animation holds up only the first warm-up step', async () => {
+    const s = await shot('keyframes.html', { fullPage: true });
+    expect(s.motion!.warmUp!.steps).toBeGreaterThan(1);
+    expect(s.motion!.warmUp!.settled).toBe(s.motion!.warmUp!.steps - 1);
+  });
+
   it('a static page has no warnings and settles quickly', async () => {
+    // static.html includes a parked slider track, a translate(-50%) badge and utility classes on a hidden tooltip.
     const s = await shot('static.html', { fullPage: true });
     expect(s.warnings).toBeUndefined();
     expect(s.motion!.settle).toMatchObject({ settled: true, count: 0 });
-    expect(s.motion!.settle.ms).toBeLessThan(1000);
+    expect(s.motion!.settle.ms).toBeLessThan(SETTLE_CAP_MS);
     expect(s.motion!.unpinned).toBeUndefined();
   });
 
@@ -188,6 +202,22 @@ describe('pinned sections in a stitched shot', () => {
     expect(s.shot!.height).toBe(INTRO + SECTION + PIN_DISTANCE + OUTRO);
     expect(s.motion!.unpinned).toBeUndefined();
     expect(blankRows(s.buffers!.shot!)).toBe(PIN_DISTANCE);
+  });
+
+  it('collapses a ScrollTrigger pin only when its parent holds nothing else', async () => {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    try {
+      const html = (wrapper: string) => `<body style="margin:0">
+        <main id="main" style="padding-bottom:2000px">${wrapper}</main>
+        <script>window.ScrollTrigger = { getAll: () => [{ pin: document.getElementById('pin') }] };</script></body>`;
+      await page.setContent(html('<section id="pin" style="height:600px">Pinned</section><section style="height:300px">Next</section>'));
+      expect(await unpin(page)).toEqual([]);
+      expect(await page.evaluate(`getComputedStyle(document.getElementById('main')).paddingBottom`)).toBe('2000px');
+      await page.setContent(html('<section id="pin" style="height:600px">Pinned</section>'));
+      expect(await unpin(page)).toEqual([{ selector: '#pin', spacer: '#main', kind: 'scrolltrigger', removed: 2000 }]);
+    } finally {
+      await page.close();
+    }
   });
 });
 

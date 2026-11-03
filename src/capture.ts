@@ -272,7 +272,8 @@ async function captureDevice(
     // Collapse pins before measuring, so the stitched height is the unpinned one.
     const unpinned = opts.fullPage && opts.unpin ? await unpin(page) : [];
     if (opts.waitMs > 0) await page.waitForTimeout(opts.waitMs);
-    const motion: MotionMeta = { settle: await settleMotion(page) };
+    // The screenshot ends CSS and Web Animations itself (animations: 'disabled'), so only wait for JS-driven changes.
+    const motion: MotionMeta = { settle: await settleMotion(page, undefined, undefined, { waapi: false }) };
     if (warmUp) motion.warmUp = warmUp;
     if (finished) motion.finished = finished;
     if (unpinned.length) motion.unpinned = unpinned;
