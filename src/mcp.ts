@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -23,10 +24,17 @@ import {
   DEFAULT_SLICE_WIDTH,
   DEFAULT_TIMEOUT_MS,
   defaultCheckOptions,
+  defaultRecordOptions,
+  DEFAULT_RECORD_DEVICE,
+  DEFAULT_RECORD_SECONDS,
+  MAX_RECORD_SECONDS,
   normalizeUrl,
   type CheckOptions,
+  type RecordOptions,
   type ShotOptions,
 } from './options.js';
+import { unpinnedLines, warningWhere } from './motion.js';
+import { record, type RecordResult } from './record.js';
 import { DEFAULT_MAX_HEIGHT } from './slices.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -84,6 +92,21 @@ const screenshotInput = {
     .boolean()
     .optional()
     .describe('Emulate prefers-reduced-motion: reduce. Helps when scroll-triggered entrance animations (GSAP, Framer Motion) leave sections blank.'),
+  finishAnimations: z
+    .boolean()
+    .optional()
+    .describe(
+      'Jump GSAP tweens to their end before capture when gsap/ScrollTrigger are on window (scrubbed and pinned ones keep their ' +
+        'scroll position), and finite Web Animations too (the screenshot already ends CSS animations). Use it when the result warns ' +
+        'that elements were still animating. Default false.'
+    ),
+  unpin: z
+    .boolean()
+    .optional()
+    .describe(
+      'Full page: collapse pinned (GSAP ScrollTrigger-style or sticky) sections so each shows once instead of over a tall blank spacer. ' +
+        'Listed under motion.unpinned. Default true.'
+    ),
   waitFor: z.string().optional().describe('CSS selector to wait for (visible) before capturing.'),
   waitMs: z.number().int().min(0).max(30_000).optional().describe('Extra settle delay after load, in ms.'),
   colorScheme: z.enum(COLOR_SCHEMES as [string, ...string[]]).optional().describe('Emulate prefers-color-scheme.'),
@@ -153,6 +176,33 @@ const checkInput = {
   timeoutMs: z.number().int().min(1000).max(120_000).optional().describe(`Navigation timeout. Default ${DEFAULT_TIMEOUT_MS}.`),
 };
 
+const recordInput = {
+  url: z
+    .string()
+    .describe('Page to record. http(s)://, file://, a bare host like localhost:3000, or a path to a local .html file.'),
+  device: z.string().optional().describe(`One device id or alias (see list_devices). Default ${DEFAULT_RECORD_DEVICE}.`),
+  selector: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe('CSS selector of the element to record (a carousel, a marquee, a pinned section). It is scrolled into view and the video is cropped to its box. Default: the whole viewport.'),
+  duration: z
+    .number()
+    .min(0.5)
+    .max(MAX_RECORD_SECONDS)
+    .optional()
+    .describe(`Seconds of video. Default ${DEFAULT_RECORD_SECONDS}, max ${MAX_RECORD_SECONDS}.`),
+  gif: z.boolean().optional().describe('Also write a GIF (10 fps, at most 640 px wide). Default false.'),
+  mp4: z.boolean().optional().describe('Also write an mp4; needs an ffmpeg with H.264 on PATH, skipped with a warning otherwise. Default false.'),
+  reducedMotion: z.boolean().optional().describe('Emulate prefers-reduced-motion: reduce.'),
+  waitFor: z.string().optional().describe('CSS selector to wait for (visible) before recording.'),
+  waitMs: z.number().int().min(0).max(30_000).optional().describe('Extra delay before recording, in ms.'),
+  colorScheme: z.enum(COLOR_SCHEMES as [string, ...string[]]).optional().describe('Emulate prefers-color-scheme.'),
+  outDir: z.string().optional().describe(`Output directory, relative to the server's cwd. Default ${DEFAULT_OUT_DIR}.`),
+  timeoutMs: z.number().int().min(1000).max(120_000).optional().describe(`Navigation timeout. Default ${DEFAULT_TIMEOUT_MS}.`),
+};
+
 type AuthArgs = {
   cookies?: { name: string; value: string; domain?: string | undefined; path?: string | undefined }[] | undefined;
   headers?: Record<string, string> | undefined;
@@ -201,6 +251,8 @@ export function createServer(): McpServer {
           timeoutMs: args.timeoutMs ?? DEFAULT_TIMEOUT_MS,
           emulate: true,
           reducedMotion: args.reducedMotion ?? false,
+          finishAnimations: args.finishAnimations ?? false,
+          unpin: args.unpin ?? true,
           maxHeight: args.maxHeight ?? DEFAULT_MAX_HEIGHT,
           saveSlices: args.saveSlices,
           maxSlices: args.maxSlices ?? DEFAULT_MAX_SLICES,
@@ -302,6 +354,62 @@ export function createServer(): McpServer {
           { type: 'text', text: JSON.stringify(report, null, 2) },
         ];
         return report.devices.every(d => d.error) ? { isError: true, content } : { content };
+      } finally {
+        await browser.close();
+      }
+    }
+  );
+
+  server.registerTool(
+    'record',
+    {
+      title: 'Record a short video of a page or element',
+      description:
+        'Record a few seconds of a page, or of one element, as a VP9 webm (plus a GIF or mp4 on request), for motion a ' +
+        'screenshot cannot show: carousels, marquees, pinned scroll sections, looping animations. screenshot warns ' +
+        '"carousel: use rpc record" when it sees one. Returns the file paths, a short summary and the first frame (poster) inline.',
+      inputSchema: { ...recordInput, ...authInput },
+      annotations: { readOnlyHint: false, openWorldHint: true },
+    },
+    async args => {
+      let options: RecordOptions;
+      try {
+        const auth = authFrom(args);
+        options = {
+          ...defaultRecordOptions(args.url),
+          device: resolveDevices([args.device ?? DEFAULT_RECORD_DEVICE])[0]!.id,
+          selector: args.selector,
+          duration: args.duration ?? DEFAULT_RECORD_SECONDS,
+          gif: args.gif ?? false,
+          mp4: args.mp4 ?? false,
+          reducedMotion: args.reducedMotion ?? false,
+          outDir: args.outDir ?? DEFAULT_OUT_DIR,
+          waitFor: args.waitFor,
+          waitMs: args.waitMs ?? 0,
+          colorScheme: args.colorScheme as RecordOptions['colorScheme'],
+          timeoutMs: args.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+          ...(Object.keys(auth).length ? { auth } : {}),
+        };
+        resolveAuth(options.url, auth);
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: (err as Error).message }] };
+      }
+      let browser: Awaited<ReturnType<typeof launchBrowser>>;
+      try {
+        browser = await launchBrowser();
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: `Could not start the browser: ${(err as Error).message}` }] };
+      }
+      try {
+        const r = await record(options, { browser });
+        const content: Content[] = [{ type: 'text', text: recordSummary(r) + '\n\n' + JSON.stringify(r, null, 2) }];
+        if (r.error) return { isError: true, content };
+        if (r.poster) {
+          const p = await renderPreview(browser, await readFile(r.poster.path), r.poster);
+          content.push({ type: 'text', text: `${r.device}${r.selector ? ` ${r.selector}` : ''}: first frame (poster) ${p.width}x${p.height}` });
+          content.push({ type: 'image', data: p.data.toString('base64'), mimeType: 'image/jpeg' });
+        }
+        return { content };
       } finally {
         await browser.close();
       }
@@ -412,8 +520,15 @@ export function headline(
       continue;
     }
     const size = s.shot ? `${s.shot.width}x${s.shot.height}px` : '';
+    const motion = [
+      ...unpinnedLines(s.motion?.unpinned).map(u => `  unpinned: ${u}`),
+      ...(s.warnings ?? []).map(w => {
+        const where = warningWhere(w);
+        return `  WARN [${w.id}] ${w.message}${where ? ` at ${where}` : ''}\n    fix: ${w.fix}`;
+      }),
+    ];
     if (!options.fullPage) {
-      lines.push(`ok ${s.device}: ${size}${s.shot ? ` ${s.shot.path}` : ''}`);
+      lines.push(`ok ${s.device}: ${size}${s.shot ? ` ${s.shot.path}` : ''}`, ...motion);
       continue;
     }
     const parts = [
@@ -444,8 +559,25 @@ export function headline(
         parts.push(`  full PNG: ${s.shot ? s.shot.path : ''}`);
       }
     }
-    lines.push(parts.join('\n'));
+    lines.push(parts.join('\n'), ...motion);
   }
+  return lines.join('\n');
+}
+
+/** First lines of the record tool's result: what was written, or why not. */
+export function recordSummary(r: RecordResult): string {
+  const lines: string[] = [];
+  if (r.auth) lines.push(`auth: ${describeAuth(r.auth)}`);
+  if (r.error) {
+    lines.push(`FAILED ${r.device}: ${r.error}${r.hint ? `\n  hint: ${r.hint}` : ''}`);
+    return lines.join('\n');
+  }
+  const v = r.video!;
+  lines.push(`ok ${r.device}${r.selector ? ` ${r.selector}` : ''}: ${v.duration}s webm ${v.width}x${v.height} at ${v.fps} fps ${v.path}`);
+  if (r.poster) lines.push(`  poster: ${r.poster.path}`);
+  if (r.gif) lines.push(`  gif: ${r.gif.path} (${r.gif.width}x${r.gif.height}, ${r.gif.frames} frames)`);
+  if (r.mp4) lines.push(`  mp4: ${r.mp4.path}`);
+  for (const w of r.warnings ?? []) lines.push(`  WARN ${w}`);
   return lines.join('\n');
 }
 

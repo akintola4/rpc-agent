@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+Motion: captures that match what a person scrolling sees, a Motion check,
+and `rpc record`.
+
+### Added
+
+- `rpc record <url>` writes a few seconds of video (VP9 webm) of the page
+  or of one element (`--selector`, scrolled into view and cropped to its
+  box), plus a poster PNG of the first frame. `--duration` (default 5, up
+  to 30 s), `-d` for one device (default `desktop-1440`), `--gif`, `--mp4`
+  (needs an ffmpeg with H.264 on PATH; skipped with a warning otherwise),
+  and the same auth flags as `rpc shot`. Frames come from a screenshot loop
+  at device pixels, encoded at a constant 25 fps by Playwright's own ffmpeg
+  build (already downloaded by `rpc install`), with a system ffmpeg as the
+  fallback. GIFs are encoded in Node with no new dependency.
+- MCP `record` tool with the same options; it returns the paths, a summary
+  and the poster inline.
+- `rpc shot --finish-animations` (MCP `finishAnimations`) jumps GSAP tweens
+  and non-scrubbed ScrollTriggers to their end when `gsap` / `ScrollTrigger`
+  are on `window`, and finite Web Animations, CSS animations and transitions
+  too. Counts are in `motion.finished`.
+- `rpc shot --no-unpin` (MCP `unpin: false`) keeps pinned sections as they
+  are in full-page shots.
+- Each shot has `warnings` when motion made the capture differ from the
+  page in use: elements still animating, a pinned section left in place,
+  content still hidden by a reveal, and carousels ("use `rpc record` for
+  motion"). The terminal prints them under the device and the MCP headline
+  lists them with a fix.
+- `rpc check` has a Motion group: `motion-running` and
+  `motion-reveal-hidden` (warn), `motion-loop`, `motion-pinned` and
+  `motion-carousel` (info). Never an error.
+- `rpc doctor` reports the ffmpeg `rpc record` would use and whether mp4 is
+  available. Its exit code still depends on Chromium only.
+
+### Changed
+
+- `rpc shot` waits for the visible page to settle before capturing, and at
+  each warm-up scroll step: no style or class change on a visible element
+  for a short quiet period (and at the warm-up steps no finite animation
+  running on one; the screenshot ends CSS and Web Animations itself),
+  capped (2 s before capture, 800 ms per step, 8 s for the warm-up).
+  The result is in `motion.settle`.
+- Full-page shots collapse pinned sections (GSAP-style `.pin-spacer`
+  wrappers, pins `ScrollTrigger.getAll()` reports, and sticky or fixed
+  sections that are the only child of a much taller parent), so each
+  section shows once instead of over a blank spacer. Each one is listed in
+  `motion.unpinned` with the CSS px removed.
+
 ### Fixed
 
 - `rpc check`: the tap-target check skips inline links in a sentence (WCAG

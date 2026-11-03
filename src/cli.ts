@@ -8,6 +8,8 @@ import { capture, type DeviceShot } from './capture.js';
 import { checkExitCode, runCheck, summaryLine, type CheckReport } from './check.js';
 import { deviceLine, plainReport } from './check-format.js';
 import { CATEGORY_LABELS, CATEGORY_ORDER, DEVICE_ALIASES, DEVICES } from './devices.js';
+import { unpinnedLines, warningWhere } from './motion.js';
+import { record, type RecordResult } from './record.js';
 import { currentMode, openPath, waitForEnter } from './term.js';
 
 /** Plain-output colours: identity unless FORCE_COLOR asks for colour. */
@@ -130,6 +132,25 @@ async function main(argv: string[]): Promise<number> {
       else printCheck(report);
       return checkExitCode(report, cmd.options.failOn);
     }
+    case 'record': {
+      if (mode.rich) {
+        const { ui, c } = await loadUi();
+        return ui.runRecord(cmd.options, { open: cmd.open }, c);
+      }
+      const result = await record(
+        cmd.options,
+        cmd.json
+          ? {}
+          : {
+              onAuth: a => console.log(`auth: ${describeAuth(a)}`),
+              onRecording: s => console.log(`recording ${s}s of ${cmd.options.selector ?? 'the viewport'} on ${cmd.options.device}`),
+            }
+      );
+      if (cmd.json) console.log(JSON.stringify(result, null, 2));
+      else printRecord(result);
+      if (cmd.open && !result.error) openPath(result.outDir);
+      return result.error ? 1 : 0;
+    }
     case 'login': {
       if (cmd.passwordFromFlag) {
         console.error(`rpc: ${paint.warn('warning:')} --password is visible in shell history and the process list; set RPC_LOGIN_PASSWORD instead`);
@@ -216,8 +237,12 @@ function printDoctor(r: DoctorReport): void {
   console.log(`node        ${r.node}`);
   console.log(`playwright  ${r.playwright}`);
   console.log(`browsers    ${r.browsersPath}`);
+  const ff = r.ffmpeg;
+  console.log(`ffmpeg      ${ff.source === 'missing' ? `${paint.warn('missing')} (only rpc record needs it)` : `${paint.ok('ok')} (${ff.source}, ${ff.path})`}`);
+  console.log(`mp4         ${r.mp4.ok ? `${paint.ok('ok')} (${r.mp4.encoder})` : 'no (optional: ffmpeg with H.264 on PATH, for rpc record --mp4)'}`);
   if (r.ok) {
     console.log(`chromium    ${paint.ok('ok')} (${r.version})`);
+    if (ff.fix) console.error(`rpc: ${ff.fix}`);
     return;
   }
   console.log(`chromium    ${paint.bad(r.chromium)}`);
@@ -246,6 +271,29 @@ function printShot(s: DeviceShot): void {
     lines.push(`   ${first.replace(/-slice-\d+\.jpg$/, '-slice-NN.jpg')}  ${s.slices.total} slice(s), ${s.slices.items[0].width}px wide`);
   }
   if (s.consoleErrors?.length) lines.push(`   ${s.consoleErrors.length} console error(s), first: ${s.consoleErrors[0]}`);
+  for (const u of unpinnedLines(s.motion?.unpinned)) lines.push(`   unpinned ${u}`);
+  for (const w of s.warnings ?? []) {
+    const where = warningWhere(w);
+    lines.push(`   ${paint.warn('warn:')} ${w.message}${where ? `: ${where}` : ''}`);
+  }
+  console.log(lines.join('\n'));
+}
+
+function printRecord(r: RecordResult): void {
+  const label = `${r.device} (${r.viewport.width}x${r.viewport.height} @${r.dpr}x)`;
+  if (r.error) {
+    console.error(`${paint.bad('x')} ${label}: ${r.error}`);
+    if (r.hint) console.error(`   ${paint.warn('hint:')} ${r.hint}`);
+    return;
+  }
+  const lines = [`${paint.ok('ok')} ${label}${r.selector ? ` ${r.selector}` : ''}${r.status && r.status >= 400 ? ` HTTP ${r.status}` : ''}`];
+  const v = r.video;
+  if (v) lines.push(`   ${rel(v.path)}  ${v.width}x${v.height}, ${v.duration}s at ${v.fps} fps (${v.captured} frames captured, ${r.ffmpeg} ffmpeg)`);
+  if (r.poster) lines.push(`   ${rel(r.poster.path)}  ${r.poster.width}x${r.poster.height} poster`);
+  if (r.gif) lines.push(`   ${rel(r.gif.path)}  ${r.gif.width}x${r.gif.height}, ${r.gif.frames} frames`);
+  if (r.mp4) lines.push(`   ${rel(r.mp4.path)}  ${r.mp4.encoder}`);
+  for (const w of r.warnings ?? []) lines.push(`   ${paint.warn('warn:')} ${w}`);
+  if (r.consoleErrors?.length) lines.push(`   ${r.consoleErrors.length} console error(s), first: ${r.consoleErrors[0]}`);
   console.log(lines.join('\n'));
 }
 

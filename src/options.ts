@@ -22,6 +22,10 @@ export interface ShotOptions {
   emulate: boolean;
   /** Emulate prefers-reduced-motion: reduce. */
   reducedMotion: boolean;
+  /** Jump finite Web Animations (and GSAP, when it is on window) to their end before capture. */
+  finishAnimations: boolean;
+  /** Full page: collapse pinned sections so each shows once instead of over a blank spacer. */
+  unpin: boolean;
   /** Full-page cap in CSS px; taller pages are cut off and marked clipped. */
   maxHeight: number;
   /**
@@ -54,6 +58,8 @@ export function defaultShotOptions(url: string): ShotOptions {
     timeoutMs: DEFAULT_TIMEOUT_MS,
     emulate: true,
     reducedMotion: false,
+    finishAnimations: false,
+    unpin: true,
     maxHeight: DEFAULT_MAX_HEIGHT,
     maxSlices: DEFAULT_MAX_SLICES,
     sliceWidth: DEFAULT_SLICE_WIDTH,
@@ -92,6 +98,48 @@ export function defaultCheckOptions(url: string): CheckOptions {
     reducedMotion: false,
     shots: false,
     failOn: 'error',
+  };
+}
+
+/** `rpc record`: one device, a duration, an optional element to crop to. */
+export interface RecordOptions {
+  url: string;
+  /** One device id. */
+  device: string;
+  /** Crop to this element's box (scrolled into view first). */
+  selector?: string | undefined;
+  /** Seconds of video. */
+  duration: number;
+  /** Also write a GIF. */
+  gif: boolean;
+  /** Also write an mp4 (needs a system ffmpeg with H.264). */
+  mp4: boolean;
+  outDir: string;
+  waitFor?: string | undefined;
+  waitMs: number;
+  colorScheme?: ColorScheme | undefined;
+  timeoutMs: number;
+  emulate: boolean;
+  reducedMotion: boolean;
+  auth?: AuthOptions | undefined;
+}
+
+export const DEFAULT_RECORD_DEVICE = 'desktop-1440';
+export const DEFAULT_RECORD_SECONDS = 5;
+export const MAX_RECORD_SECONDS = 30;
+
+export function defaultRecordOptions(url: string): RecordOptions {
+  return {
+    url: normalizeUrl(url),
+    device: DEFAULT_RECORD_DEVICE,
+    duration: DEFAULT_RECORD_SECONDS,
+    gif: false,
+    mp4: false,
+    outDir: DEFAULT_OUT_DIR,
+    waitMs: 0,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    emulate: true,
+    reducedMotion: false,
   };
 }
 

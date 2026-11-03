@@ -30,6 +30,8 @@ describe('parseCli', () => {
       timeoutMs: 30000,
       emulate: true,
       reducedMotion: false,
+      finishAnimations: false,
+      unpin: true,
       maxHeight: 60000,
       maxSlices: 10,
       sliceWidth: 768,
@@ -51,6 +53,8 @@ describe('parseCli', () => {
       '--slice-width', '1200',
       '--max-height', '30000',
       '--reduced-motion',
+      '--finish-animations',
+      '--no-unpin',
       '--json'
     );
     expect(json).toBe(true);
@@ -66,6 +70,8 @@ describe('parseCli', () => {
       timeoutMs: 5000,
       emulate: false,
       reducedMotion: true,
+      finishAnimations: true,
+      unpin: false,
       maxHeight: 30000,
       saveSlices: true,
       maxSlices: 10,

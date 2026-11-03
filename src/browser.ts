@@ -1,7 +1,7 @@
-import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, resolve } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { chromium, type Browser } from 'playwright';
 
 const require = createRequire(import.meta.url);
@@ -49,6 +49,55 @@ export async function launchBrowser(): Promise<Browser> {
   }
 }
 
+export interface Ffmpeg {
+  path: string;
+  /** Playwright's own build (downloaded with Chromium) or one on PATH. */
+  source: 'playwright' | 'system';
+}
+
+/**
+ * Playwright's ffmpeg build, which `playwright install chromium` downloads
+ * next to the browser. It reads MJPEG, writes VP9 webm and PNG, and has the
+ * crop, scale and pad filters: enough for `rpc record` and its GIF frames.
+ * Found through Playwright's registry, so PLAYWRIGHT_BROWSERS_PATH applies.
+ */
+export function playwrightFfmpeg(): string | undefined {
+  try {
+    const fromPlaywright = createRequire(require.resolve('playwright/package.json'));
+    const core = fromPlaywright('playwright-core/lib/coreBundle') as {
+      registry?: { registry?: { findExecutable(name: string): { executablePath(): string | undefined } | undefined } };
+    };
+    const path = core.registry?.registry?.findExecutable('ffmpeg')?.executablePath();
+    return path && existsSync(path) ? path : undefined;
+  } catch {
+    return undefined; // registry layout changed: fall back to PATH
+  }
+}
+
+/** `ffmpeg` on PATH, if any. Relative entries (`.`) are skipped: they would run whatever `ffmpeg` sits in the cwd. */
+export function systemFfmpeg(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const names = process.platform === 'win32' ? ['ffmpeg.exe'] : ['ffmpeg'];
+  for (const dir of (env.PATH ?? '').split(delimiter)) {
+    for (const n of names) if (isAbsolute(dir) && existsSync(join(dir, n))) return join(dir, n);
+  }
+  return undefined;
+}
+
+/** The ffmpeg `rpc record` uses: Playwright's build first, then PATH. */
+export function findFfmpeg(): Ffmpeg | undefined {
+  const pw = playwrightFfmpeg();
+  if (pw) return { path: pw, source: 'playwright' };
+  const sys = systemFfmpeg();
+  return sys ? { path: sys, source: 'system' } : undefined;
+}
+
+/** An H.264 encoder in this ffmpeg build (Playwright's has none), for --mp4. */
+export function h264Encoder(ffmpeg: string): string | undefined {
+  const r = spawnSync(ffmpeg, ['-hide_banner', '-encoders'], { encoding: 'utf8', timeout: 10_000 });
+  const list = `${r.stdout ?? ''}`;
+  return ['libx264', 'h264_videotoolbox', 'libopenh264'].find(e => new RegExp(`\\s${e}\\s`).test(list));
+}
+
 export interface DoctorReport {
   ok: boolean;
   node: string;
@@ -58,6 +107,23 @@ export interface DoctorReport {
   version?: string;
   error?: string;
   fix?: string;
+  /** `rpc record`: which ffmpeg it would use. Not part of `ok`: only recording needs it. */
+  ffmpeg: { source: 'playwright' | 'system' | 'missing'; path?: string; fix?: string };
+  /** `rpc record --mp4`: a system ffmpeg with an H.264 encoder (optional). */
+  mp4: { ok: boolean; encoder?: string };
+}
+
+/** ffmpeg for `rpc record`, and H.264 for --mp4. */
+export function videoReport(): Pick<DoctorReport, 'ffmpeg' | 'mp4'> {
+  const ff = findFfmpeg();
+  const sys = systemFfmpeg();
+  const encoder = sys ? h264Encoder(sys) : undefined;
+  return {
+    ffmpeg: ff
+      ? { source: ff.source, path: ff.path }
+      : { source: 'missing', fix: 'rpc record needs ffmpeg: run `npx rpc-agent install` (Playwright downloads its ffmpeg with Chromium), or put ffmpeg on PATH.' },
+    mp4: encoder ? { ok: true, encoder } : { ok: false },
+  };
 }
 
 /** Check that Chromium is installed and actually launches. */
@@ -66,6 +132,7 @@ export async function doctor(): Promise<DoctorReport> {
     node: process.version,
     playwright: playwrightVersion(),
     browsersPath: process.env.PLAYWRIGHT_BROWSERS_PATH || '(Playwright default cache)',
+    ...videoReport(),
   };
   try {
     const browser = await launchBrowser();

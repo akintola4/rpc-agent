@@ -26,11 +26,13 @@ import {
   SCROLL_ONCE_JS,
 } from './check-page.js';
 import { resolveDevices, type Device } from './devices.js';
+import { plainText } from './errors.js';
+import { detectMotion, motionCheckFindings, settleMotion } from './motion.js';
 import type { CheckOptions, FailOn } from './options.js';
 import { imageSize } from './png.js';
 
 export type Severity = 'error' | 'warn' | 'info';
-export type CheckId = 'basics' | 'meta' | 'layout-shift' | 'labels' | 'fonts' | 'mobile';
+export type CheckId = 'basics' | 'meta' | 'layout-shift' | 'labels' | 'fonts' | 'mobile' | 'motion';
 
 /** Report order and headings. */
 export const CHECKS: { id: CheckId; title: string }[] = [
@@ -40,6 +42,7 @@ export const CHECKS: { id: CheckId; title: string }[] = [
   { id: 'labels', title: 'Unlabelled controls' },
   { id: 'fonts', title: 'Fonts' },
   { id: 'mobile', title: 'Mobile viewport' },
+  { id: 'motion', title: 'Motion' },
 ];
 
 /** Bumped when a field changes meaning or goes away; new fields don't bump it. */
@@ -52,6 +55,8 @@ export const CLS_POOR = 0.25;
 export const CLS_TOLERANCE = 0.001;
 /** Fixed idle after load and settle, before the scroll. */
 export const IDLE_MS = 500;
+/** Motion: how long the settle probe waits for animations to stop before reporting what is still moving. */
+export const MOTION_PROBE_MS = 1000;
 export const MIN_TAP = 44;
 
 export interface FindingItem {
@@ -220,7 +225,7 @@ async function checkDevice(
     const page = await context.newPage();
     await applyHeaders(context, page, auth);
     await page.addInitScript(LAYOUT_SHIFT_INIT_JS);
-    page.on('pageerror', e => uncaught.add(e.message.split('\n')[0] ?? e.message));
+    page.on('pageerror', e => uncaught.add(plainText(e.message.split('\n')[0] ?? e.message)));
     page.on('console', m => {
       const text = m.text();
       if (/Mixed Content/i.test(text)) {
@@ -228,7 +233,7 @@ async function checkDevice(
         if (url) mixed.set(url, /upgraded/i.test(text) ? 'upgraded' : 'blocked');
         return;
       }
-      if (m.type() === 'error') consoleErrors.add(text);
+      if (m.type() === 'error') consoleErrors.add(plainText(text));
     });
     page.on('response', r => {
       if (r.request().resourceType() === 'font') fonts.set(r.url(), r.status());
@@ -287,6 +292,9 @@ async function checkDevice(
       if (opts.shots) await attachShots(page, mobile, opts, device, 'horizontal-overflow');
       findings.push(...mobile);
     }
+
+    const still = await settleMotion(page, undefined, MOTION_PROBE_MS);
+    for (const f of motionCheckFindings(await detectMotion(page, 'viewport'), still)) findings.push({ ...f, check: 'motion' });
     return { findings, ...(og ? { ogImage: og } : {}) };
   } finally {
     await context.close();
