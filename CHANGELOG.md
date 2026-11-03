@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
 Motion: captures that match what a person scrolling sees, a Motion check,
 and `rpc record`.

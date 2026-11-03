@@ -1,6 +1,6 @@
 {
   "name": "rpc-agent",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Screenshot a URL at device viewports, optionally framed in device bezels, signed in or not, and audit it before launch. CLI and MCP server for AI coding agents.",
   "keywords": [
     "mcp",
