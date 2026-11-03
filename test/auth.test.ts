@@ -500,8 +500,8 @@ describe('MCP screenshot with auth', () => {
     const client = await mcpClient();
     try {
       const { tools } = await client.listTools();
-      expect(tools.map(t => t.name)).toEqual(['screenshot', 'check', 'list_devices', 'list_sessions']);
-      for (const tool of tools.slice(0, 2)) {
+      expect(tools.map(t => t.name)).toEqual(['screenshot', 'check', 'record', 'list_devices', 'list_sessions']);
+      for (const tool of tools.slice(0, 3)) {
         const props = Object.keys((tool.inputSchema as { properties: object }).properties);
         expect(props).toEqual(expect.arrayContaining(['cookies', 'headers', 'storageState', 'useSession', 'allowOrigins']));
       }

@@ -51,6 +51,23 @@ const CHECK_OPTIONS: Row[] = [
   ['    --json', 'print the report as JSON (schema in the README)'],
 ];
 
+const RECORD_OPTIONS: Row[] = [
+  ['-d, --device <id>', 'one device id or alias (default: desktop-1440)'],
+  ['    --selector <css>', 'crop to this element; it is scrolled into view first'],
+  ['    --duration <s>', 'seconds of video, 0.5 to 30 (default: 5)'],
+  ['    --gif', 'also write a GIF (10 fps, at most 640px wide)'],
+  ['    --mp4', 'also write an mp4; needs ffmpeg with H.264 on PATH, skipped otherwise'],
+  ['-o, --out <dir>', 'output directory (default: ./.rpc-shots)'],
+  ['    --wait-for <selector>', 'wait for a CSS selector before recording'],
+  ['    --wait <ms>', 'extra delay before recording (default: 0)'],
+  ['    --color-scheme <s>', 'light | dark | no-preference'],
+  ['    --reduced-motion', 'emulate prefers-reduced-motion: reduce'],
+  ['    --timeout <ms>', 'navigation timeout (default: 30000)'],
+  ['    --no-emulate', 'viewport + DPR only (no mobile UA / touch)'],
+  ['    --open', 'open the output folder when done'],
+  ['    --json', 'print the result as JSON'],
+];
+
 const LOGIN_OPTIONS: Row[] = [
   ['    --save <file>', 'write the storage state here instead of the per-origin session'],
   ['    --form', 'headless: fill an email + password form (CI, agents)'],
@@ -90,6 +107,18 @@ export const COMMANDS: Record<HelpTopic, CommandHelp> = {
       ['rpc check localhost:3000/billing', 'uses the session saved by rpc login'],
     ],
   },
+  record: {
+    usage: 'rpc record <url> [options]',
+    summary:
+      'Record a short video of a page, or of one element, for what a still cannot show: carousels, marquees, ' +
+      'pinned scroll sections, hover loops. Writes a VP9 webm and a poster PNG, plus a GIF or mp4 on request.',
+    options: [...RECORD_OPTIONS, ...AUTH_OPTIONS],
+    examples: [
+      ["rpc record localhost:3000 --selector '.hero-carousel'", '5 s of one element'],
+      ['rpc record localhost:3000 -d iphone --duration 10 --gif', 'whole phone viewport, plus a GIF'],
+      ["rpc record example.com --selector '#logos' --mp4", 'mp4 too, when ffmpeg is on PATH'],
+    ],
+  },
   login: {
     usage: 'rpc login <url> [--form] [--save <file>]',
     summary:
@@ -123,7 +152,7 @@ export const COMMANDS: Record<HelpTopic, CommandHelp> = {
   },
   doctor: {
     usage: 'rpc doctor [--json]',
-    summary: "Check that Playwright's Chromium is installed and launches.",
+    summary: "Check that Playwright's Chromium is installed and launches, and which ffmpeg `rpc record` would use.",
     options: [['    --json', 'print the report as JSON']],
     examples: [['rpc doctor', 'exits 1 when Chromium is missing']],
   },
@@ -138,14 +167,15 @@ export const COMMANDS: Record<HelpTopic, CommandHelp> = {
   },
   mcp: {
     usage: 'rpc mcp',
-    summary: 'Run the MCP server on stdio (tools: screenshot, check, list_devices, list_sessions).',
+    summary: 'Run the MCP server on stdio (tools: screenshot, check, record, list_devices, list_sessions).',
     examples: [['claude mcp add --scope user rpc -- node /abs/path/dist/cli.js mcp', 'add to Claude Code']],
   },
 };
 
 const TOP: Row[] = [
   ['shot <url>', 'capture screenshots'],
-  ['check <url>', 'pre-launch audit: meta, layout shift, labels, fonts, mobile'],
+  ['check <url>', 'pre-launch audit: meta, layout shift, labels, fonts, mobile, motion'],
+  ['record <url>', 'record a short video of the page or one element'],
   ['login <url>', 'sign in once; later shots of that origin use the session'],
   ['sessions', 'list or clear saved sessions'],
   ['devices', 'list device ids and aliases'],

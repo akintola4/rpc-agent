@@ -29,7 +29,8 @@ import {
   type DeviceCategory,
 } from './devices.js';
 import { unpinnedLines, warningWhere } from './motion.js';
-import { defaultShotOptions, normalizeUrl, type CheckOptions, type ShotOptions } from './options.js';
+import { record, type RecordResult } from './record.js';
+import { defaultShotOptions, normalizeUrl, type CheckOptions, type RecordOptions, type ShotOptions } from './options.js';
 import { openCommand, openPath, waitForEnter } from './term.js';
 
 export type Colors = ReturnType<typeof pc.createColors>;
@@ -439,6 +440,69 @@ export async function runShot(options: ShotOptions, run: RunOptions, c: Colors):
   return failed > 0 ? 1 : 0;
 }
 
+// ------------------------------------------------------------------ record
+
+/** Lines for the final "Recorded" box. */
+export function recordedLines(r: RecordResult, c: Colors): string[] {
+  const out: string[] = [];
+  const file = (path: string, meta: string) => out.push(`${c.green('✓')} ${c.cyan(rel(path))}  ${c.dim(meta)}`);
+  if (r.video) file(r.video.path, `${r.video.width}×${r.video.height} · ${r.video.duration}s · ${r.video.fps} fps · ${size(r.video.path)}`);
+  if (r.poster) file(r.poster.path, `${r.poster.width}×${r.poster.height} · poster`);
+  if (r.gif) file(r.gif.path, `${r.gif.width}×${r.gif.height} · ${r.gif.frames} frames · ${size(r.gif.path)}`);
+  if (r.mp4) file(r.mp4.path, `${r.mp4.encoder} · ${size(r.mp4.path)}`);
+  for (const w of r.warnings ?? []) for (const [i, l] of wrap(w, textWidth() - 4).entries()) out.push(`${i ? '  ' : c.yellow('▲ ')}${c.dim(l)}`);
+  return out;
+}
+
+export async function runRecord(options: RecordOptions, run: { open: boolean }, c: Colors): Promise<number> {
+  const auth: ResolvedAuth = resolveAuth(options.url, options.auth ?? {});
+  printBanner(c);
+  intro(c);
+  const rows: [string, string][] = [
+    ['device', c.cyan(options.device)],
+    ['element', options.selector ?? c.dim('whole viewport')],
+    ['duration', `${options.duration}s`],
+    ['also', [options.gif ? 'gif' : '', options.mp4 ? 'mp4' : ''].filter(Boolean).join(', ') || c.dim('webm only')],
+  ];
+  if (options.reducedMotion) rows.push(['reduced motion', c.green('yes')]);
+  if (auth.summary) rows.push(...authRows(auth.summary, c));
+  rows.push(['output', `${rel(options.outDir)}/`]);
+  const w = Math.max(...rows.map(([k]) => k.length)) + 1;
+  p.note([c.cyan(options.url), ...rows.map(([k, v]) => `  ${c.dim(`${k}:`.padEnd(w))} ${v}`)].join('\n'), 'Record Summary');
+
+  const s = p.spinner();
+  s.start('Starting Chromium');
+  let browser;
+  try {
+    browser = await launchBrowser();
+  } catch (err) {
+    s.error(c.red(err instanceof BrowserMissingError ? "Playwright's Chromium is not installed" : `Chromium did not start: ${(err as Error).message.split('\n')[0]}`));
+    if (err instanceof BrowserMissingError) p.note(wrap(installHint().replace(/^Fix: /, ''), textWidth()).join('\n'), c.yellow('Fix'));
+    p.outro(c.red('Nothing recorded.'));
+    return 1;
+  }
+  s.message(`Loading ${c.cyan(options.url)}`);
+  let result: RecordResult;
+  try {
+    result = await record(options, { browser, auth, onRecording: secs => s.message(`Recording ${secs}s`) });
+  } finally {
+    await browser.close().catch(() => {});
+  }
+  if (result.error) {
+    s.error(c.red(result.error));
+    if (result.hint) p.note(wrap(result.hint, textWidth()).join('\n'), c.yellow('Hint'));
+    p.outro(c.red('Nothing recorded.'));
+    return 1;
+  }
+  s.stop(`Recorded ${result.video?.duration ?? options.duration}s on ${result.device}`);
+  p.note(recordedLines(result, c).join('\n'), c.green('Recorded'));
+  const dir = rel(result.outDir);
+  let advice = `Open with: ${openCommand().cmd} ${dir}`;
+  if (run.open) advice = openPath(result.outDir) ? `Opened ${dir}` : advice;
+  p.outro(`${c.green('Done!')}  ${c.dim(advice)}`);
+  return 0;
+}
+
 // ------------------------------------------------------------------ check
 
 /** Lines for the "Check Summary" box. */
@@ -735,6 +799,9 @@ export async function runDoctor(check: () => Promise<DoctorReport>, c: Colors): 
   s.stop(`Node ${c.dim(r.node)}`);
   p.log.step(`Playwright ${c.dim(r.playwright)}`);
   p.log.step(`Browsers ${c.dim(r.browsersPath)}`);
+  if (r.ffmpeg.source === 'missing') p.log.warn(`ffmpeg ${c.yellow('missing')} ${c.dim('(only rpc record needs it; rpc install fetches it)')}`);
+  else p.log.step(`ffmpeg ${c.dim(`${r.ffmpeg.source} · ${r.ffmpeg.path}`)}`);
+  p.log.step(`mp4 ${r.mp4.ok ? c.dim(r.mp4.encoder ?? '') : c.dim('no (optional: ffmpeg with H.264 on PATH)')}`);
   if (r.ok) {
     p.log.success(`Chromium ${c.green('launches')} ${c.dim(r.version ?? '')}`);
     p.outro(`${c.green('Ready.')}  ${c.dim('Try: rpc shot localhost:3000 --bezels')}`);

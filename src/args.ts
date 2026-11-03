@@ -6,10 +6,13 @@ import {
   COLOR_SCHEMES,
   DEFAULT_TIMEOUT_MS,
   defaultCheckOptions,
+  defaultRecordOptions,
   defaultShotOptions,
   FAIL_ON,
+  MAX_RECORD_SECONDS,
   normalizeUrl,
   type CheckOptions,
+  type RecordOptions,
   type ColorScheme,
   type FailOn,
   type ShotOptions,
@@ -18,6 +21,7 @@ import {
 export type Command =
   | { command: 'shot'; options: ShotOptions; json: boolean; open: boolean }
   | { command: 'check'; options: CheckOptions; json: boolean }
+  | { command: 'record'; options: RecordOptions; json: boolean; open: boolean }
   | { command: 'devices'; json: boolean }
   | { command: 'mcp' }
   | { command: 'doctor'; json: boolean }
@@ -40,7 +44,7 @@ export interface LoginCommand {
   json: boolean;
 }
 
-export const HELP_TOPICS = ['shot', 'check', 'login', 'sessions', 'devices', 'doctor', 'install', 'mcp'] as const;
+export const HELP_TOPICS = ['shot', 'check', 'record', 'login', 'sessions', 'devices', 'doctor', 'install', 'mcp'] as const;
 export type HelpTopic = (typeof HELP_TOPICS)[number];
 
 function isTopic(s: string | undefined): s is HelpTopic {
@@ -59,7 +63,9 @@ export const USAGE = `rpc - screenshot a URL at device viewports, optionally in 
 
 Usage:
   rpc shot <url> [options]   capture screenshots
-  rpc check <url> [options]  pre-launch audit: meta, layout shift, labels, fonts, mobile
+  rpc check <url> [options]  pre-launch audit: meta, layout shift, labels, fonts, mobile,
+                             motion
+  rpc record <url> [options] record a short video of the page or one element
   rpc login <url> [--form]   sign in once and save the session for that origin
   rpc sessions [list|clear [origin]]
                              list or delete saved sessions
@@ -96,7 +102,15 @@ Check options (plus -d, --wait-for, --wait, --timeout, --color-scheme, -o, --jso
       --shots                screenshot the elements behind layout-shift and
                              overflow findings (into --out)
 
-Auth options (values are never printed, shot and check):
+Record options (plus --wait-for, --wait, --timeout, --color-scheme,
+--reduced-motion, --no-emulate, -o, --json, --open):
+  -d, --device <id>          one device id or alias (default: desktop-1440)
+      --selector <css>       crop to this element (scrolled into view first)
+      --duration <s>         seconds of video, up to 30 (default: 5)
+      --gif                  also write a GIF
+      --mp4                  also write an mp4 (needs ffmpeg with H.264 on PATH)
+
+Auth options (values are never printed; shot, check and record):
       --cookie <c>           "name=value[; Domain=…; Path=…]", repeatable;
                              sent to the target origin only
       --header <h>           "Name: value", repeatable; target origin only
@@ -112,6 +126,7 @@ Examples:
   rpc shot https://example.com --full-page --color-scheme dark
   rpc login localhost:3000/sign-in && rpc shot localhost:3000/dashboard
   rpc check localhost:3000 --fail-on warn
+  rpc record localhost:3000 --selector '.carousel' --duration 6 --gif
 `;
 
 export function parseCli(argv: readonly string[], env: NodeJS.ProcessEnv = process.env): Command {
@@ -155,6 +170,8 @@ export function parseCli(argv: readonly string[], env: NodeJS.ProcessEnv = proce
       return parseShot(rest);
     case 'check':
       return parseCheck(rest);
+    case 'record':
+      return parseRecord(rest);
     default:
       throw new ArgError(`Unknown command "${cmd}". Run \`rpc --help\`.`);
   }
@@ -307,6 +324,67 @@ function parseCheck(args: string[]): Command {
   const auth = parseAuth(values, options.url);
   if (auth) options.auth = auth;
   return { command: 'check', options, json: Boolean(values.json) };
+}
+
+function parseRecord(args: string[]): Command {
+  if (wantsHelp(args)) return { command: 'help', topic: 'record' };
+  const { values, positionals } = parse(
+    args,
+    {
+      device: { type: 'string', short: 'd' },
+      devices: { type: 'string' },
+      selector: { type: 'string' },
+      duration: { type: 'string' },
+      gif: { type: 'boolean' },
+      mp4: { type: 'boolean' },
+      out: { type: 'string', short: 'o' },
+      'wait-for': { type: 'string' },
+      wait: { type: 'string' },
+      'color-scheme': { type: 'string' },
+      timeout: { type: 'string' },
+      'no-emulate': { type: 'boolean' },
+      'reduced-motion': { type: 'boolean' },
+      json: { type: 'boolean' },
+      open: { type: 'boolean' },
+      ...AUTH_FLAGS,
+    },
+    true
+  );
+  if (positionals.length === 0) throw new ArgError('Missing <url>. Usage: rpc record <url> [options]');
+  if (positionals.length > 1) throw new ArgError(`Expected one URL, got: ${positionals.join(' ')}`);
+  let options: RecordOptions;
+  try {
+    options = defaultRecordOptions(positionals[0]!);
+  } catch (err) {
+    throw new ArgError((err as Error).message);
+  }
+  const device = values.device ?? values.devices;
+  if (typeof device === 'string') {
+    const list = parseDevices(device);
+    if (list.length !== 1) throw new ArgError('rpc record takes one device (-d desktop-1440)');
+    options.device = list[0]!;
+  }
+  if (typeof values.selector === 'string') {
+    if (!values.selector.trim()) throw new ArgError('--selector is empty');
+    options.selector = values.selector;
+  }
+  if (typeof values.duration === 'string') {
+    const n = Number(values.duration);
+    if (!Number.isFinite(n) || n < 0.5 || n > MAX_RECORD_SECONDS) throw new ArgError(`--duration must be a number of seconds from 0.5 to ${MAX_RECORD_SECONDS}`);
+    options.duration = n;
+  }
+  if (values.gif) options.gif = true;
+  if (values.mp4) options.mp4 = true;
+  if (typeof values.out === 'string') options.outDir = values.out;
+  if (typeof values['wait-for'] === 'string') options.waitFor = values['wait-for'];
+  if (typeof values.wait === 'string') options.waitMs = parseMs('--wait', values.wait);
+  if (typeof values.timeout === 'string') options.timeoutMs = parseMs('--timeout', values.timeout);
+  if (typeof values['color-scheme'] === 'string') options.colorScheme = parseColorScheme(values['color-scheme']);
+  if (values['no-emulate']) options.emulate = false;
+  if (values['reduced-motion']) options.reducedMotion = true;
+  const auth = parseAuth(values, options.url);
+  if (auth) options.auth = auth;
+  return { command: 'record', options, json: Boolean(values.json), open: Boolean(values.open) };
 }
 
 function parseColorScheme(s: string): ColorScheme {
