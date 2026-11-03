@@ -96,8 +96,9 @@ const screenshotInput = {
     .boolean()
     .optional()
     .describe(
-      'Jump finite CSS/Web Animations to their end before capture, and GSAP tweens when gsap/ScrollTrigger are on window ' +
-        '(scrubbed and pinned ones keep their scroll position). Use it when the result warns that elements were still animating. Default false.'
+      'Jump GSAP tweens to their end before capture when gsap/ScrollTrigger are on window (scrubbed and pinned ones keep their ' +
+        'scroll position), and finite Web Animations too (the screenshot already ends CSS animations). Use it when the result warns ' +
+        'that elements were still animating. Default false.'
     ),
   unpin: z
     .boolean()

@@ -162,12 +162,15 @@ halfway through its reveal, and carousels froze on whatever slide was up.
 
 Before each capture, and at every step of the full-page warm-up
 scroll, rpc waits until the visible part of the page stops moving: no
-finite animation running on a visible element, and no `style` or `class`
-change on one for 150 ms (120 ms per warm-up step). It gives up after 2 s
+`style` or `class` change on a visible element for 150 ms (120 ms per
+warm-up step), and, at the warm-up steps, no finite animation running on
+one. The screenshot itself ends finite CSS and Web Animations (Playwright's
+`animations: 'disabled'`), so the wait just before it only watches for
+JS-driven changes, the kind a GSAP tween makes. It gives up after 2 s
 (800 ms per step, 8 s for the whole warm-up), so a page that never stops
-can't hang it. Anything still changing when a step runs out of time is
-treated as a loop (a JS marquee, a ticker), and later steps stop waiting for
-it. A static page only pays the quiet period. The result is on each shot as
+can't hang it. Anything still changing or animating when a step runs out
+of time is treated as a loop (a JS marquee, a ticker, a long CSS
+animation), and later steps stop waiting for it. A static page only pays the quiet period. The result is on each shot as
 `motion.settle`: `settled`, `ms`, and the selectors still active.
 
 #### Pinned sections
@@ -193,8 +196,10 @@ off.
 
 #### Finish animations
 
-`--finish-animations` calls `.finish()` on every finite Web Animation,
-which covers CSS animations and transitions too. If `window.gsap` exists,
+`--finish-animations` is for JS-driven motion, which the screenshot can't
+end on its own. It calls `.finish()` on every finite Web Animation (CSS
+animations and transitions too, so layout measured before the capture is
+the end state). If `window.gsap` exists,
 tweens and timelines on its global timeline that don't repeat forever go to
 `progress(1)`. If `window.ScrollTrigger` exists, triggers that aren't
 scrubbed or pinned get their animation set to `progress(1)`. Scrubbed and
@@ -217,13 +222,13 @@ prints them under the device:
 ```
 ok desktop-1440 (1440x900 @1x)
    .rpc-shots/localhost-3000-desktop-1440.png  1440x900
-   warn: 1 element was still animating when captured: h1.hero-title
+   warn: 3 elements were still animating when captured: div.reveal:nth-of-type(1), div.reveal:nth-of-type(2), div.reveal:nth-of-type(3)
    warn: carousel: use `rpc record` for motion: #carousel
 ```
 
 | id | When |
 | --- | --- |
-| `motion-running` | Elements were still animating or changing when the settle ran out of time: "N elements were still animating when captured" |
+| `motion-running` | Elements were still changing (style or class writes, as a JS tween makes) when the settle ran out of time: "N elements were still animating when captured". CSS and Web Animations don't count here, because the screenshot ends them |
 | `motion-pinned` | Full page only. A pin was left in place (`--no-unpin`, or one that couldn't be collapsed): "pinned section: the stitched shot may show blank space" |
 | `motion-reveal-hidden` | Content still at opacity 0, or offset by 24px or more, that looks like a reveal (see [Motion](#motion)) |
 | `motion-carousel` | A carousel or marquee is in the shot: "carousel: use `rpc record` for motion" |
@@ -536,9 +541,9 @@ them, so they are `warn` or `info` and never `error`.
 | id | Severity | When | Fix |
 | --- | --- | --- | --- |
 | `motion-running` | warn | Finite animations (from `document.getAnimations()`) or style changes still going on visible elements | `rpc shot --finish-animations`, `--wait`, or `--reduced-motion` |
-| `motion-reveal-hidden` | warn | Elements with text or media at opacity under 0.1, `visibility: hidden`, offset by 24px or more, or scaled under 0.85, that also carry a reveal class (`reveal`, `fade`, `aos`, `in-view`, `animate` and similar), a reveal attribute (`data-aos`, `data-sal`, `data-scroll` and similar) or inline opacity or transform written by a library. Only the outermost element is listed | Make sure the reveal fires, and that the content shows without JavaScript or animation |
+| `motion-reveal-hidden` | warn | Elements with text or media at opacity under 0.1, `visibility: hidden`, offset by 24px or more, or scaled under 0.85, that also carry a reveal class (`reveal`, `fade`, `aos`, `in-view`, `appear`, `animated` and similar; utility words such as `scroll`, `visible` or `animate-` don't count), a reveal attribute (`data-aos`, `data-sal`, `data-scroll` and similar) or inline opacity or transform written by a library. Carousel tracks, elements inside a carousel library root, and `translate(-50%)` centring are not offsets. Only the outermost element is listed | Make sure the reveal fires, and that the content shows without JavaScript or animation |
 | `motion-loop` | info | Infinite animations: spinners, pulses, CSS marquees | Stop them under `prefers-reduced-motion: reduce` |
-| `motion-pinned` | info | A `.pin-spacer` taller than its section by a quarter of the viewport, a pin that `ScrollTrigger.getAll()` reports, or a sticky or fixed section (half a viewport tall or more) that is the only child of a parent at least half a viewport taller | `rpc shot --full-page` collapses it; `rpc record --selector` shows it moving |
+| `motion-pinned` | info | A `.pin-spacer` taller than its section by a quarter of the viewport, a pin that `ScrollTrigger.getAll()` reports as its parent's only child, or a sticky or fixed section (half a viewport tall or more) that is the only child of a parent at least half a viewport taller | `rpc shot --full-page` collapses it; `rpc record --selector` shows it moving |
 | `motion-carousel` | info | Swiper, Embla, Splide, Keen, Flickity, Slick or Glide roots, `aria-roledescription="carousel"`, horizontal scrollers with `scroll-snap-type` on x, and tracks whose scroll position or transform changes during a 300 ms sample | `rpc record <url> --selector '<the carousel>'` |
 
 ### JSON report

@@ -18,10 +18,10 @@ and `rpc record`.
   fallback. GIFs are encoded in Node with no new dependency.
 - MCP `record` tool with the same options; it returns the paths, a summary
   and the poster inline.
-- `rpc shot --finish-animations` (MCP `finishAnimations`) jumps finite Web
-  Animations, CSS animations and transitions to their end, and GSAP tweens
-  and non-scrubbed ScrollTriggers when `gsap` / `ScrollTrigger` are on
-  `window`. Counts are in `motion.finished`.
+- `rpc shot --finish-animations` (MCP `finishAnimations`) jumps GSAP tweens
+  and non-scrubbed ScrollTriggers to their end when `gsap` / `ScrollTrigger`
+  are on `window`, and finite Web Animations, CSS animations and transitions
+  too. Counts are in `motion.finished`.
 - `rpc shot --no-unpin` (MCP `unpin: false`) keeps pinned sections as they
   are in full-page shots.
 - Each shot has `warnings` when motion made the capture differ from the
@@ -38,8 +38,9 @@ and `rpc record`.
 ### Changed
 
 - `rpc shot` waits for the visible page to settle before capturing, and at
-  each warm-up scroll step: no finite animation running on a visible
-  element and no style or class change on one for a short quiet period,
+  each warm-up scroll step: no style or class change on a visible element
+  for a short quiet period (and at the warm-up steps no finite animation
+  running on one; the screenshot ends CSS and Web Animations itself),
   capped (2 s before capture, 800 ms per step, 8 s for the warm-up).
   The result is in `motion.settle`.
 - Full-page shots collapse pinned sections (GSAP-style `.pin-spacer`

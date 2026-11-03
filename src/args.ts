@@ -84,8 +84,8 @@ Shot options:
       --slice-width <px>     max slice width (default: 768)
       --max-height <px>      full-page cap in CSS px (default: 60000)
       --reduced-motion       emulate prefers-reduced-motion: reduce
-      --finish-animations    jump animations (CSS, Web Animations, GSAP) to
-                             their end before capturing
+      --finish-animations    jump GSAP tweens on window (and Web
+                             Animations) to their end before capturing
       --no-unpin             with --full-page: keep pinned sections as they
                              are (default: collapse each to its section)
   -o, --out <dir>            output directory (default: ./.rpc-shots)

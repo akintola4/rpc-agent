@@ -423,14 +423,16 @@ was left in place), "N elements still hidden by a reveal animation", and
 "carousel: use `rpc record` for motion".
 
 **4. Settle.** An in-page wait used at the top of the page before every
-capture and at each warm-up scroll step: done when no finite animation on
-the document timeline is running on a visible element and no `style` or
-`class` attribute on a visible element changed for a quiet period. Capped
+capture and at each warm-up scroll step: done when no `style` or `class`
+attribute on a visible element changed for a quiet period and, at the
+warm-up steps, no finite animation on the document timeline is running on
+a visible element. The wait just before the screenshot ignores CSS and Web
+Animations, because `animations: 'disabled'` ends them in the image. Capped
 so it can't hang: 150 ms quiet and 2 s cap for the final settle, 120 ms
 quiet and 800 ms cap per warm-up step, 8 s for all warm-up steps together
-(after that the old 100 ms pause). An element still changing when a step
-hits its cap is remembered as a loop (a JS marquee, a ticker) and ignored by
-later steps. The result (`settled`, ms, elements still active) is on the
+(after that the old 100 ms pause). An element still changing or animating
+when a step hits its cap is remembered as a loop (a JS marquee, a ticker, a
+long CSS animation) and ignored by later steps. The result (`settled`, ms, elements still active) is on the
 shot as `motion.settle`. Static pages pay the quiet period only, so
 existing tall-page timing stays close to v0.5.
 
