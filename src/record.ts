@@ -19,16 +19,19 @@ import {
 import { findFfmpeg, h264Encoder, launchBrowser, systemFfmpeg, type Ffmpeg } from './browser.js';
 import { describeFailure, fileStem, newDeviceContext, settle, type ImageFile } from './capture.js';
 import { resolveDevice, type Device } from './devices.js';
-import { encodeGif } from './gif.js';
+import { plainText } from './errors.js';
+import { buildPalette, gifWriter } from './gif.js';
 import { settleMotion } from './motion.js';
 import type { RecordOptions } from './options.js';
-import { decodePng, imageSize, pngSize } from './png.js';
+import { decodePng, imageSize, pngSize, type RawImage } from './png.js';
 
 /** Output frame rate of the webm. */
 export const RECORD_FPS = 25;
 /** GIF frame rate and width cap. */
 export const GIF_FPS = 10;
 export const GIF_MAX_WIDTH = 640;
+/** Frames sampled (evenly) for the GIF's shared palette. */
+const GIF_PALETTE_FRAMES = 12;
 
 export interface VideoFile {
   path: string;
@@ -75,6 +78,8 @@ export interface RecordResult {
 
 export interface RecordHooks {
   browser?: Browser;
+  /** The ffmpeg to encode with (default: findFfmpeg()). */
+  ffmpeg?: Ffmpeg;
   auth?: ResolvedAuth;
   onAuth?: (summary: AuthSummary) => void;
   /** Called when frames start (after load, scroll and settle). */
@@ -108,7 +113,7 @@ export async function record(opts: RecordOptions, hooks: RecordHooks = {}): Prom
     ...(opts.selector ? { selector: opts.selector } : {}),
     ...(auth.summary ? { auth: auth.summary } : {}),
   };
-  const ffmpeg = findFfmpeg();
+  const ffmpeg = hooks.ffmpeg ?? findFfmpeg();
   if (!ffmpeg) {
     return {
       ...result,
@@ -148,9 +153,9 @@ async function recordDevice(
   try {
     const page = await context.newPage();
     await applyHeaders(context, page, auth);
-    page.on('pageerror', e => errors.add(`pageerror: ${e.message}`));
+    page.on('pageerror', e => errors.add(plainText(`pageerror: ${e.message}`)));
     page.on('console', m => {
-      if (m.type() === 'error') errors.add(`console: ${m.text()}`);
+      if (m.type() === 'error') errors.add(plainText(`console: ${m.text()}`));
     });
     const response = await page.goto(opts.url, { waitUntil: 'load', timeout: opts.timeoutMs });
     result.status = response?.status() ?? null;
@@ -201,9 +206,17 @@ async function recordDevice(
 
     hooks.onRecording?.(opts.duration);
     const webm = resolve(result.outDir, `${stem}.webm`);
-    const captured = await encodeFrames(ffmpeg.path, webm, opts.duration, () =>
-      page.screenshot({ clip, type: 'jpeg', quality: 90, animations: 'allow', caret: 'initial' })
-    );
+    let captured: number;
+    try {
+      captured = await encodeFrames(ffmpeg.path, webm, opts.duration, () =>
+        page.screenshot({ clip, type: 'jpeg', quality: 90, animations: 'allow', caret: 'initial' })
+      );
+    } catch (err) {
+      // No video: don't leave its poster behind next to an error result.
+      await rm(result.poster.path, { force: true });
+      delete result.poster;
+      throw err;
+    }
     result.video = { ...(await probeVideo(ffmpeg.path, webm)), path: webm, fps: RECORD_FPS, captured };
 
     if (opts.gif) result.gif = await writeGif(ffmpeg.path, webm, resolve(result.outDir, `${stem}.gif`), result.video);
@@ -230,9 +243,10 @@ export function recordStem(url: string, deviceId: string, selector?: string): st
  * Each frame is repeated until the next one's timestamp (the middle of its
  * screenshot call), and the last fills the remainder, so the video is
  * exactly `seconds` long whatever the capture rate. Returns the number of
- * screenshots taken.
+ * screenshots taken. If ffmpeg can't start or dies, or a screenshot fails,
+ * the child is stopped and the partial file removed.
  */
-async function encodeFrames(ffmpeg: string, out: string, seconds: number, shot: () => Promise<Buffer>): Promise<number> {
+export async function encodeFrames(ffmpeg: string, out: string, seconds: number, shot: () => Promise<Buffer>): Promise<number> {
   const total = Math.round(seconds * RECORD_FPS);
   const child = spawn(
     ffmpeg,
@@ -246,37 +260,69 @@ async function encodeFrames(ffmpeg: string, out: string, seconds: number, shot: 
   );
   let stderr = '';
   child.stderr.on('data', d => (stderr += d));
-  const exited = new Promise<number>((res, rej) => {
-    child.on('error', rej);
-    child.on('close', code => res(code ?? 1));
-  });
-  // A dead ffmpeg makes writes fail; the exit code and stderr say why.
-  child.stdin.on('error', () => {});
-  const write = (buf: Buffer) =>
-    new Promise<void>(res => {
-      if (child.stdin.write(buf)) res();
-      else child.stdin.once('drain', res);
+  // Settles once, on exit or on a spawn failure; never rejects, so a failed
+  // spawn can't become an unhandled rejection while frames are being taken.
+  let spawnError: Error | undefined;
+  let dead = false;
+  const exited = new Promise<number>(res => {
+    child.once('error', err => {
+      spawnError = err;
+      res(-1);
     });
+    child.once('close', code => res(code ?? 1));
+  }).finally(() => {
+    dead = true;
+  });
+  // A dead ffmpeg makes writes fail (EPIPE); the exit code and stderr say why.
+  child.stdin.on('error', () => {
+    dead = true;
+  });
+  // Wait for room in the pipe, or for ffmpeg to go away ('drain' never comes then).
+  const write = (buf: Buffer) =>
+    dead || child.stdin.destroyed
+      ? Promise.resolve()
+      : new Promise<void>(res => {
+          if (child.stdin.write(buf)) return res();
+          const done = () => {
+            child.stdin.off('drain', done);
+            child.stdin.off('close', done);
+            res();
+          };
+          child.stdin.once('drain', done);
+          child.stdin.once('close', done);
+          void exited.then(done);
+        });
 
   let written = 0;
   let last: Buffer | undefined;
   let captured = 0;
   const fill = async (upTo: number) => {
-    for (; written < Math.min(upTo, total) && last; written++) await write(last);
+    for (; written < Math.min(upTo, total) && last && !dead; written++) await write(last);
   };
-  const t0 = performance.now();
-  while (performance.now() - t0 < seconds * 1000 && child.exitCode === null) {
-    const before = performance.now();
-    const buf = await shot();
-    const at = ((before + performance.now()) / 2 - t0) / 1000;
-    captured++;
-    await fill(Math.round(at * RECORD_FPS));
-    last = buf;
+  try {
+    const t0 = performance.now();
+    while (performance.now() - t0 < seconds * 1000 && !dead) {
+      const before = performance.now();
+      const buf = await shot();
+      const at = ((before + performance.now()) / 2 - t0) / 1000;
+      captured++;
+      await fill(Math.round(at * RECORD_FPS));
+      last = buf;
+    }
+    await fill(total);
+  } catch (err) {
+    child.kill('SIGKILL');
+    await exited;
+    await rm(out, { force: true });
+    throw err;
   }
-  await fill(total);
   child.stdin.end();
   const code = await exited;
-  if (code !== 0) throw new RecordError('ENCODE_FAILED', `ffmpeg failed (exit ${code}): ${stderr.trim().split('\n').pop() ?? ''}`, `ffmpeg: ${ffmpeg}`);
+  if (spawnError) throw new RecordError('ENCODE_FAILED', `Could not run ffmpeg: ${spawnError.message}`, `ffmpeg: ${ffmpeg}`);
+  if (code !== 0) {
+    await rm(out, { force: true });
+    throw new RecordError('ENCODE_FAILED', `ffmpeg failed (exit ${code}): ${stderr.trim().split('\n').pop() ?? ''}`, `ffmpeg: ${ffmpeg}`);
+  }
   return captured;
 }
 
@@ -300,7 +346,7 @@ export async function probeVideo(ffmpeg: string, path: string): Promise<{ width:
     child.on('error', rej);
     child.on('close', () => res(stderr));
   });
-  const size = /Video: .*?(\d{2,5})x(\d{2,5})/.exec(info);
+  const size = /Video: .*?\b(\d{1,5})x(\d{1,5})\b/.exec(info);
   const dur = /Duration: (\d+):(\d+):(\d+(?:\.\d+)?)/.exec(info);
   if (!size || !dur) throw new RecordError('ENCODE_FAILED', `Could not read the video ffmpeg wrote: ${path}`);
   return {
@@ -310,18 +356,36 @@ export async function probeVideo(ffmpeg: string, path: string): Promise<{ width:
   };
 }
 
-/** Decode the webm to PNG frames at GIF_FPS (Playwright's ffmpeg can), then encode them in gif.ts. */
-async function writeGif(ffmpeg: string, webm: string, out: string, video: { width: number; height: number }): Promise<ImageFile & { frames: number }> {
+/**
+ * Decode the webm to PNG frames at GIF_FPS (Playwright's ffmpeg can), then
+ * encode them in gif.ts: the palette from a sample of frames, then one frame
+ * decoded and encoded at a time, so memory stays at about one frame.
+ */
+async function writeGif(
+  ffmpeg: string,
+  webm: string,
+  out: string,
+  video: { width: number; height: number; duration: number }
+): Promise<ImageFile & { frames: number }> {
   const width = Math.min(video.width, GIF_MAX_WIDTH);
   const height = Math.max(1, Math.round((video.height * width) / video.width));
+  // `-r` alone pads a frame or two at the edges; cap at the video's length.
+  const count = Math.max(1, Math.round(video.duration * GIF_FPS));
   const dir = await mkdtemp(join(tmpdir(), 'rpc-gif-'));
   try {
-    await run(ffmpeg, ['-loglevel', 'error', '-y', '-i', webm, '-r', String(GIF_FPS), '-vf', `scale=${width}:${height}`, '-f', 'image2', join(dir, 'f-%04d.png')]);
+    await run(ffmpeg, ['-loglevel', 'error', '-y', '-i', webm, '-r', String(GIF_FPS), '-frames:v', String(count), '-vf', `scale=${width}:${height}`, '-f', 'image2', join(dir, 'f-%04d.png')]);
     const files = (await readdir(dir)).filter(f => f.endsWith('.png')).sort();
-    const frames = await Promise.all(files.map(async f => decodePng(await readFile(join(dir, f)))));
-    const gif = encodeGif(frames, Math.round(100 / GIF_FPS));
-    await writeFile(out, gif);
-    return { path: out, ...imageSize(gif)!, frames: frames.length };
+    if (!files.length) throw new RecordError('ENCODE_FAILED', 'ffmpeg wrote no GIF frames');
+    const frame = async (f: string) => decodePng(await readFile(join(dir, f)));
+    const step = Math.max(1, Math.ceil(files.length / GIF_PALETTE_FRAMES));
+    const sample: RawImage[] = [];
+    for (let i = 0; i < files.length; i += step) sample.push(await frame(files[i]!));
+    const gif = gifWriter(width, height, buildPalette(sample), Math.round(100 / GIF_FPS));
+    sample.length = 0;
+    for (const f of files) gif.add(await frame(f));
+    const data = gif.end();
+    await writeFile(out, data);
+    return { path: out, ...imageSize(data)!, frames: files.length };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -135,3 +135,12 @@ export function explainError(err: unknown, ctx: ErrorContext): ExplainedError {
 
   return { code: 'UNKNOWN', error: first };
 }
+
+/**
+ * Page-supplied text (console errors, uncaught exceptions) with control
+ * characters removed, so a page can't send terminal escape sequences through
+ * rpc's output. Newlines and tabs stay.
+ */
+export function plainText(text: string): string {
+  return text.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+}

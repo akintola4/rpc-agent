@@ -26,6 +26,7 @@ import {
   SCROLL_ONCE_JS,
 } from './check-page.js';
 import { resolveDevices, type Device } from './devices.js';
+import { plainText } from './errors.js';
 import { detectMotion, motionCheckFindings, settleMotion } from './motion.js';
 import type { CheckOptions, FailOn } from './options.js';
 import { imageSize } from './png.js';
@@ -224,7 +225,7 @@ async function checkDevice(
     const page = await context.newPage();
     await applyHeaders(context, page, auth);
     await page.addInitScript(LAYOUT_SHIFT_INIT_JS);
-    page.on('pageerror', e => uncaught.add(e.message.split('\n')[0] ?? e.message));
+    page.on('pageerror', e => uncaught.add(plainText(e.message.split('\n')[0] ?? e.message)));
     page.on('console', m => {
       const text = m.text();
       if (/Mixed Content/i.test(text)) {
@@ -232,7 +233,7 @@ async function checkDevice(
         if (url) mixed.set(url, /upgraded/i.test(text) ? 'upgraded' : 'blocked');
         return;
       }
-      if (m.type() === 'error') consoleErrors.add(text);
+      if (m.type() === 'error') consoleErrors.add(plainText(text));
     });
     page.on('response', r => {
       if (r.request().resourceType() === 'font') fonts.set(r.url(), r.status());

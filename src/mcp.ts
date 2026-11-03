@@ -182,6 +182,8 @@ const recordInput = {
   device: z.string().optional().describe(`One device id or alias (see list_devices). Default ${DEFAULT_RECORD_DEVICE}.`),
   selector: z
     .string()
+    .trim()
+    .min(1)
     .optional()
     .describe('CSS selector of the element to record (a carousel, a marquee, a pinned section). It is scrolled into view and the video is cropped to its box. Default: the whole viewport.'),
   duration: z

@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { chromium, type Browser } from 'playwright';
 
 const require = createRequire(import.meta.url);
@@ -74,11 +74,11 @@ export function playwrightFfmpeg(): string | undefined {
   }
 }
 
-/** `ffmpeg` on PATH, if any. */
+/** `ffmpeg` on PATH, if any. Relative entries (`.`) are skipped: they would run whatever `ffmpeg` sits in the cwd. */
 export function systemFfmpeg(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const names = process.platform === 'win32' ? ['ffmpeg.exe'] : ['ffmpeg'];
   for (const dir of (env.PATH ?? '').split(delimiter)) {
-    for (const n of names) if (dir && existsSync(join(dir, n))) return join(dir, n);
+    for (const n of names) if (isAbsolute(dir) && existsSync(join(dir, n))) return join(dir, n);
   }
   return undefined;
 }

@@ -12,7 +12,7 @@ import {
 } from './auth.js';
 import { launchBrowser } from './browser.js';
 import { renderFramed, renderSlices, type Segment } from './composite.js';
-import { explainError } from './errors.js';
+import { explainError, plainText } from './errors.js';
 import { emulationFor, resolveDevices, type Device } from './devices.js';
 import {
   detectMotion,
@@ -242,9 +242,9 @@ async function captureDevice(
   try {
     const page = await context.newPage();
     await applyHeaders(context, page, auth);
-    page.on('pageerror', e => errors.add(`pageerror: ${e.message}`));
+    page.on('pageerror', e => errors.add(plainText(`pageerror: ${e.message}`)));
     page.on('console', m => {
-      if (m.type() === 'error') errors.add(`console: ${m.text()}`);
+      if (m.type() === 'error') errors.add(plainText(`console: ${m.text()}`));
     });
 
     const response = await page.goto(opts.url, { waitUntil: 'load', timeout: opts.timeoutMs });

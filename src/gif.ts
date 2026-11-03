@@ -159,11 +159,19 @@ export function lzw(indices: Uint8Array): Buffer {
   return Buffer.from(blocks);
 }
 
-/** Encode same-sized frames as a looping GIF, `delayCs` hundredths of a second each. */
-export function encodeGif(frames: RawImage[], delayCs: number): Buffer {
-  if (!frames.length) throw new Error('No frames to encode');
-  const { width, height } = frames[0]!;
-  const palette = buildPalette(frames);
+export interface GifWriter {
+  /** Append a frame (same size as the GIF). */
+  add(frame: RawImage): void;
+  /** The finished file. */
+  end(): Buffer;
+}
+
+/**
+ * A looping GIF built one frame at a time, `delayCs` hundredths of a second
+ * each, with a palette made beforehand (buildPalette on all or some frames).
+ * Only the previous frame's indices are kept, not the frames themselves.
+ */
+export function gifWriter(width: number, height: number, palette: Uint8Array, delayCs: number): GifWriter {
   const nearest = mapper(palette);
   const table = Buffer.alloc(256 * 3);
   table.set(palette);
@@ -175,21 +183,34 @@ export function encodeGif(frames: RawImage[], delayCs: number): Buffer {
     Buffer.from([0x21, 0xff, 11, ...Buffer.from('NETSCAPE2.0', 'latin1'), 3, 1, 0, 0, 0]), // loop forever
   ];
   let shown: Uint8Array | undefined;
-  for (const f of frames) {
-    if (f.width !== width || f.height !== height) throw new Error('GIF frames must all be the same size');
-    const idx = new Uint8Array(width * height);
-    const now = new Uint8Array(width * height);
-    for (let i = 0; i < width * height; i++) {
-      const o = i * f.channels;
-      now[i] = nearest(f.data[o]!, f.data[o + 1]!, f.data[o + 2]!);
-      idx[i] = shown && shown[i] === now[i] ? TRANSPARENT : now[i]!;
-    }
-    // Graphic control: keep the previous frame under this one, transparent index after the first frame.
-    parts.push(Buffer.from([0x21, 0xf9, 4, shown ? 0x05 : 0x04, ...u16(delayCs), TRANSPARENT, 0]));
-    parts.push(Buffer.from([0x2c, 0, 0, 0, 0, ...u16(width), ...u16(height), 0]));
-    parts.push(lzw(idx));
-    shown = now;
-  }
-  parts.push(Buffer.from([0x3b]));
-  return Buffer.concat(parts);
+  return {
+    add(f) {
+      if (f.width !== width || f.height !== height) throw new Error('GIF frames must all be the same size');
+      const idx = new Uint8Array(width * height);
+      const now = new Uint8Array(width * height);
+      for (let i = 0; i < width * height; i++) {
+        const o = i * f.channels;
+        now[i] = nearest(f.data[o]!, f.data[o + 1]!, f.data[o + 2]!);
+        idx[i] = shown && shown[i] === now[i] ? TRANSPARENT : now[i]!;
+      }
+      // Graphic control: keep the previous frame under this one, transparent index after the first frame.
+      parts.push(Buffer.from([0x21, 0xf9, 4, shown ? 0x05 : 0x04, ...u16(delayCs), TRANSPARENT, 0]));
+      parts.push(Buffer.from([0x2c, 0, 0, 0, 0, ...u16(width), ...u16(height), 0]));
+      parts.push(lzw(idx));
+      shown = now;
+    },
+    end() {
+      if (!shown) throw new Error('No frames to encode');
+      return Buffer.concat([...parts, Buffer.from([0x3b])]);
+    },
+  };
+}
+
+/** Encode same-sized frames as a looping GIF, `delayCs` hundredths of a second each. */
+export function encodeGif(frames: RawImage[], delayCs: number): Buffer {
+  if (!frames.length) throw new Error('No frames to encode');
+  const { width, height } = frames[0]!;
+  const gif = gifWriter(width, height, buildPalette(frames), delayCs);
+  for (const f of frames) gif.add(f);
+  return gif.end();
 }

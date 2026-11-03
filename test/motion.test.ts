@@ -1,21 +1,23 @@
 import { createServer, type Server } from 'node:http';
-import { existsSync } from 'node:fs';
-import { readFile, rm } from 'node:fs/promises';
+import { existsSync, readdirSync } from 'node:fs';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
-import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { delimiter, join, relative, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Browser } from 'playwright';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { ArgError, parseCli } from '../src/args.js';
-import { findFfmpeg } from '../src/browser.js';
+import { findFfmpeg, systemFfmpeg } from '../src/browser.js';
+import { plainText } from '../src/errors.js';
 import { capture, launchBrowser, type DeviceShot } from '../src/capture.js';
 import { runCheck, type CheckReport } from '../src/check.js';
-import { encodeGif, lzw } from '../src/gif.js';
+import { buildPalette, encodeGif, gifWriter, lzw } from '../src/gif.js';
 import { createServer as createMcpServer } from '../src/mcp.js';
 import { defaultCheckOptions, defaultRecordOptions, defaultShotOptions, type RecordOptions, type ShotOptions } from '../src/options.js';
 import { decodePng, imageSize, type RawImage } from '../src/png.js';
-import { record, recordStem } from '../src/record.js';
+import { encodeFrames, GIF_FPS, record, RecordError, recordStem } from '../src/record.js';
 import { failFast } from './serve.js';
 
 const FIXTURES = resolve(import.meta.dirname, 'fixtures', 'motion');
@@ -260,7 +262,7 @@ describe('rpc record', () => {
   it('--gif writes a GIF of the same clip', async () => {
     const r = await record(opts({ duration: 1, gif: true }), { browser });
     expect(r.gif).toMatchObject({ width: 640, height: 356 });
-    expect(r.gif!.frames).toBeGreaterThanOrEqual(9);
+    expect(r.gif!.frames).toBe(1 * GIF_FPS);
     const gif = await readFile(r.gif!.path);
     expect(gif.subarray(0, 6).toString('latin1')).toBe('GIF89a');
     expect(imageSize(gif)).toEqual({ width: 640, height: 356 });
@@ -278,6 +280,21 @@ describe('rpc record', () => {
     expect(r.hint).toMatch(/querySelector/);
     expect(r.video).toBeUndefined();
   });
+
+  it('records a clip only a few pixels across', async () => {
+    const r = await record(opts({ url: `${ORIGIN}/static.html`, device: DESKTOP, selector: '#dot', duration: 1 }), { browser });
+    expect(r.error, r.error).toBeUndefined();
+    expect(r.video).toMatchObject({ width: 4, height: 4 });
+  });
+
+  it('a dead ffmpeg fails the recording instead of hanging, and leaves no files', async () => {
+    const outDir = join(OUT, 'record-fail');
+    // node rejects ffmpeg's arguments and exits at once: stdin breaks while frames are still coming.
+    const r = await record(opts({ duration: 3, outDir }), { browser, ffmpeg: { path: process.execPath, source: 'system' } });
+    expect(r.code).toBe('ENCODE_FAILED');
+    expect(r.poster).toBeUndefined();
+    expect(readdirSync(outDir)).toEqual([]);
+  }, 30_000);
 
   it('names files after the selector', () => {
     expect(recordStem('http://localhost:3000/', 'desktop-1440', '.hero > .carousel')).toBe('localhost-3000-desktop-1440-hero-carousel');
@@ -306,10 +323,65 @@ describe('rpc record', () => {
       expect(content[2]!.mimeType).toBe('image/jpeg');
       const bad = await client.callTool({ name: 'record', arguments: { url: `${ORIGIN}/carousel.html`, device: 'nope' } });
       expect(bad.isError).toBe(true);
+      const empty = await client.callTool({ name: 'record', arguments: { url: `${ORIGIN}/carousel.html`, selector: '  ' } });
+      expect(empty.isError).toBe(true);
     } finally {
       await client.close();
     }
   }, 60_000);
+});
+
+describe('encodeFrames', () => {
+  const big = Buffer.alloc(300_000, 1); // bigger than the pipe buffer, so writes wait on drain
+
+  it('rejects with ENCODE_FAILED when ffmpeg exits early', async () => {
+    const out = join(OUT, 'enc', 'early.webm');
+    await mkdir(join(OUT, 'enc'), { recursive: true });
+    await expect(encodeFrames(process.execPath, out, 2, async () => big)).rejects.toMatchObject({ code: 'ENCODE_FAILED' });
+  }, 15_000);
+
+  it('rejects instead of crashing when ffmpeg cannot be started', async () => {
+    const err = await encodeFrames(join(tmpdir(), 'rpc-no-such-ffmpeg'), join(OUT, 'enc', 'none.webm'), 1, async () => big).catch(e => e);
+    expect(err).toBeInstanceOf(RecordError);
+    expect(err).toMatchObject({ code: 'ENCODE_FAILED', message: expect.stringMatching(/Could not run ffmpeg/) });
+  });
+
+  it('stops ffmpeg and removes the partial file when a frame fails', async () => {
+    const out = join(OUT, 'enc', 'partial.webm');
+    const page = await browser.newPage();
+    try {
+      await page.setContent('<div style="width:64px;height:64px;background:red"></div>');
+      const jpeg = await page.screenshot({ type: 'jpeg', clip: { x: 0, y: 0, width: 64, height: 64 } });
+      let n = 0;
+      const shot = async () => {
+        if (++n > 5) throw new Error('page crashed');
+        return jpeg;
+      };
+      await expect(encodeFrames(findFfmpeg()!.path, out, 5, shot)).rejects.toThrow('page crashed');
+      expect(existsSync(out)).toBe(false);
+    } finally {
+      await page.close();
+    }
+  }, 15_000);
+});
+
+describe('ffmpeg lookup and page text', () => {
+  it('skips relative PATH entries', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rpc-path-'));
+    try {
+      const name = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+      await writeFile(join(dir, name), '');
+      await chmod(join(dir, name), 0o755);
+      expect(systemFfmpeg({ PATH: relative(process.cwd(), dir) })).toBeUndefined();
+      expect(systemFfmpeg({ PATH: ['', relative(process.cwd(), dir), dir].join(delimiter) })).toBe(join(dir, name));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('strips control characters from page text', () => {
+    expect(plainText('console: \x1b[31mred\x1b]0;title\x07 done\tok\n')).toBe('console: [31mred]0;title done\tok\n');
+  });
 });
 
 describe('cli', () => {
@@ -379,6 +451,14 @@ describe('gif encoder', () => {
       const input = Uint8Array.from({ length: len }, (_, i) => (i * 7 + (i >> 5)) % 251);
       expect(unlzw(lzw(input))).toEqual([...input]);
     }
+  });
+
+  it('the frame-at-a-time writer matches encodeGif', () => {
+    const frame = (rgb: number[]): RawImage => ({ width: 4, height: 2, channels: 3, data: Buffer.from(Array(8).fill(rgb).flat()) });
+    const frames = [frame([255, 0, 0]), frame([0, 0, 255]), frame([255, 0, 0])];
+    const w = gifWriter(4, 2, buildPalette(frames), 10);
+    for (const f of frames) w.add(f);
+    expect(w.end().equals(encodeGif(frames, 10))).toBe(true);
   });
 
   it('writes a looping GIF with a shared palette', () => {
